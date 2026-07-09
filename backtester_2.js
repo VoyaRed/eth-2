@@ -1,7 +1,7 @@
 // backtester_2.js - True Historical Forward/Backtester (Web Service Edition)
 const ccxt = require('ccxt');
 const { Impit } = require('impit');
-const http = require('http'); // 👈 NEW: Required for the dummy server
+const http = require('http'); 
 
 // Your static weights from Supabase
 const settings = {
@@ -15,7 +15,7 @@ const settings = {
     high_volatility_confidence: 50.1 
 };
 
-// --- NEW: Crypto.com UpDown Boundary Mechanics ---
+// --- Crypto.com UpDown Boundary Mechanics ---
 const riskSettings = {
     takeProfitPerc: 0.005, // 0.5% Target (Ceiling/Floor Knockout)
     stopLossPerc: 0.005,   // 0.5% Stop (Ceiling/Floor Knockout)
@@ -156,6 +156,13 @@ async function runBacktest() {
     try {
         console.log("🌐 Verifying connection routing...");
         const res = await impersonator.fetch('https://api.ipify.org?format=json');
+        
+        // Ensure proxy authentication actually succeeded before mapping to JSON
+        if (!res.ok) {
+            console.error(`❌ Proxy check failed with HTTP status: ${res.status}`);
+            return;
+        }
+
         const data = await res.json();
         console.log("✅ Current Bot IP:", data.ip);
     } catch (err) {
@@ -163,7 +170,7 @@ async function runBacktest() {
         return; 
     }
 
-    console.log("📥 Fetching historical 5m candles for ETH/USD...");
+    console.log("📥 Fetching historical 5m candles for ETH/USDT...");
     
     const exchange = new ccxt.cryptocom({
         fetchImplementation: impersonator.fetch.bind(impersonator)
@@ -174,15 +181,26 @@ async function runBacktest() {
 
     try {
         while (allCandles.length < 3000) {
-            const batch = await exchange.fetchOHLCV('ETH/USD', '5m', since, 1000);
+            // FIXED: Using ETH/USDT as standard base pairing to avoid Symbol NotFound exceptions.
+            // FIXED: Omitted the 1000 limit parameter to let CCXT safely enforce the API's pagination limits.
+            const batch = await exchange.fetchOHLCV('ETH/USDT', '5m', since);
+            
             if (batch.length === 0) break;
+            
             allCandles = allCandles.concat(batch);
             since = batch[batch.length - 1][0] + 1;
             console.log(`...fetched ${allCandles.length} candles`);
+            
             await new Promise(r => setTimeout(r, 1000));
         }
     } catch (e) {
         console.log("Fetch Error:", e.message);
+    }
+
+    // Safety guard to prevent slicing logic failure if fetch errors out entirely
+    if (allCandles.length < 50) {
+        console.log("❌ Not enough candles fetched to run a backtest. Please check your proxy proxy credentials or connection limit.");
+        return;
     }
 
     const splitIndex = Math.floor(allCandles.length * 0.7);
@@ -264,13 +282,13 @@ async function runBacktest() {
     testPhase(outOfSample, "OUT-OF-SAMPLE (Lie Detector Phase)");
 }
 
-// 👈 NEW: Dummy HTTP Server to satisfy Render's Web Service Health Check
 const PORT = process.env.PORT || 3000;
+// FIXED: Appended '0.0.0.0' inside the listen block so Render can cleanly ping your dummy service internally.
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end('Crypto.com Backtester is alive! Check your Render Logs to see the results.\n');
-}).listen(PORT, () => {
-    console.log(`🟢 Dummy web server bound to port ${PORT}. Render Health Checks will pass!`);
+}).listen(PORT, '0.0.0.0', () => {
+    console.log(`🟢 Dummy web server bound to port ${PORT} on 0.0.0.0. Render Health Checks will pass!`);
     
     // Kick off the backtest once the server is successfully listening
     runBacktest().catch(console.error);
