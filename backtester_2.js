@@ -176,7 +176,7 @@ async function runBacktest() {
     let activeImpersonator = null;
 
     // --- 🛡️ THE FIX: DYNAMIC ROTATING FETCH WRAPPER ---
-    const safeFetch = async (url, options = {}) can=> {
+    const safeFetch = async (url, options = {}) => {
         if (!activeImpersonator) {
             return new Response(JSON.stringify({ error: "No active proxy session configured." }), { status: 500 });
         }
