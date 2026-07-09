@@ -171,43 +171,58 @@ async function runBacktest() {
 
     console.log("📥 Fetching historical 5m candles for ETH/USDT...");
     
-    // --- FIXED CCXT INSTANCEOF BUG ---
+    // --- 🛡️ THE FIX: BULLETPROOF FETCH WRAPPER ---
     const safeFetch = async (url, options) => {
-        return await impersonator.fetch(url, options);
+        try {
+            return await impersonator.fetch(url, options);
+        } catch (err) {
+            // We intercept the raw proxy/socket error before CCXT sees it.
+            // By returning a formatted 502 Bad Gateway response instead of throwing, 
+            // we bypass the `instanceof` check completely. CCXT handles this gracefully!
+            console.log(`⚠️ Network blip intercepted: ${err.message}`);
+            return new Response(JSON.stringify({ error: err.message }), { 
+                status: 502, 
+                statusText: "Bad Gateway - Proxy Intercept" 
+            });
+        }
     };
     
-    // Attach expected globals so ccxt's internal checks do not evaluate to undefined
-    safeFetch.FetchError = Error;
-    safeFetch.Headers = globalThis.Headers;
-    safeFetch.Request = globalThis.Request;
-    safeFetch.Response = globalThis.Response;
+    // Adding standard dummy classes just to be extra secure
+    class DummyFetchError extends Error {}
+    safeFetch.FetchError = DummyFetchError;
+    safeFetch.Headers = globalThis.Headers || Map;
+    safeFetch.Request = globalThis.Request || Object;
+    safeFetch.Response = globalThis.Response || Object;
 
     const exchange = new ccxt.cryptocom({
-        fetchImplementation: safeFetch
+        fetchImplementation: safeFetch,
+        enableRateLimit: true 
     });
-    // ---------------------------------
+    // ----------------------------------------------
     
     let allCandles = [];
     let since = exchange.milliseconds() - (3000 * 5 * 60 * 1000); 
 
     try {
         while (allCandles.length < 3000) {
-            const batch = await exchange.fetchOHLCV('ETH/USDT', '5m', since);
+            // Passing a specific limit (200) to speed up pagination safely 
+            const batch = await exchange.fetchOHLCV('ETH/USDT', '5m', since, 200);
             
-            if (batch.length === 0) break;
+            if (!batch || batch.length === 0) break;
             
             allCandles = allCandles.concat(batch);
             since = batch[batch.length - 1][0] + 1;
             console.log(`...fetched ${allCandles.length} candles`);
             
-            await new Promise(r => setTimeout(r, 1000));
+            // Adding a safe sleep to prevent the proxy from rate-limiting
+            await new Promise(r => setTimeout(r, 1200));
         }
     } catch (e) {
-        console.log("Fetch Error:", e.message);
+        console.log("Fetch Error (Safely Caught):", e.message);
     }
 
     if (allCandles.length < 50) {
-        console.log("❌ Not enough candles fetched to run a backtest. Please check your proxy proxy credentials or connection limit.");
+        console.log("❌ Not enough candles fetched to run a backtest. Please check your proxy credentials or connection limit.");
         return;
     }
 
@@ -296,34 +311,5 @@ http.createServer((req, res) => {
     res.end('Crypto.com Backtester is alive! Check your Render Logs to see the results.\n');
 }).listen(PORT, '0.0.0.0', () => {
     console.log(`🟢 Dummy web server bound to port ${PORT} on 0.0.0.0. Render Health Checks will pass!`);
-    runBacktest().catch(console.error);
-});
- (1 + riskSettings.stopLossPerc)
-                };
-            }
-        }
-
-        const totalTrades = wins + losses;
-        const winRate = totalTrades > 0 ? ((wins / totalTrades) * 100).toFixed(2) : 0;
-        
-        console.log(`\n📊 --- ${phaseName} RESULTS ---`);
-        console.log(`Total Trades Executed: ${totalTrades}`);
-        console.log(`Wins: ${wins} | Losses: ${losses} | Skipped: ${skips}`);
-        console.log(`Strict Win Rate: ${winRate}%`);
-    };
-
-    testPhase(inSample, "IN-SAMPLE (Sandbox Phase)");
-    testPhase(outOfSample, "OUT-OF-SAMPLE (Lie Detector Phase)");
-}
-
-const PORT = process.env.PORT || 3000;
-// FIXED: Appended '0.0.0.0' inside the listen block so Render can cleanly ping your dummy service internally.
-http.createServer((req, res) => {
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('Crypto.com Backtester is alive! Check your Render Logs to see the results.\n');
-}).listen(PORT, '0.0.0.0', () => {
-    console.log(`🟢 Dummy web server bound to port ${PORT} on 0.0.0.0. Render Health Checks will pass!`);
-    
-    // Kick off the backtest once the server is successfully listening
     runBacktest().catch(console.error);
 });
