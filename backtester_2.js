@@ -65,7 +65,7 @@ const calculateRSI = (closes) => {
     return rsi;
 };
 
-// Optimized Core Engine Simulator - Balanced Flow Edition
+// Optimized Core Engine Simulator - Dual Strategy (High Frequency) Edition
 function simulatePrediction(candles) {
     if (candles.length < 200) return { pred: "SKIP", conf: 0 };
 
@@ -103,6 +103,7 @@ function simulatePrediction(candles) {
     const lowerWick = Math.min(currentOpen, currentClose) - currentLow;
     const bodySize = Math.max(Math.abs(currentClose - currentOpen), 0.0001);
 
+    // Filter absolute dead chop
     let colorFlips = 0;
     for (let i = closes.length - 1; i >= closes.length - 4; i--) {
         const currentColor = closes[i] >= opens[i] ? 'green' : 'red';
@@ -120,54 +121,66 @@ function simulatePrediction(candles) {
     }
     const atrPercentage = ((trSum / 14) / currentClose) * 100;
 
-    // --- 🎯 RELAXED TREND STRENGTH CALCULATION ---
-    // Lowered the gap requirement from 0.0008 to 0.0003
-    const macroTrendGap = Math.abs(macroEmaFast - macroEmaSlow) / currentClose;
-    const isTrending = macroTrendGap > 0.0003; 
-
-    let pred = "SKIP";
     const isMacroUp = macroEmaFast > macroEmaSlow;
     const isMacroDown = macroEmaFast < macroEmaSlow;
+    const microTrendUp = emaFast > emaSlow;
+    const microTrendDown = emaFast < emaSlow;
 
-    // UP Trade: Trend is Bullish, RSI is somewhat cooled (< 48), and MACD is ticking up
-    if (isTrending && isMacroUp && rsi < 48 && currentHist > prevHist) {
+    let pred = "SKIP";
+    let strategyTriggered = "";
+
+    // ==========================================
+    // STRATEGY A: THE PULLBACK SNIPER
+    // ==========================================
+    const pullbackUp = isMacroUp && microTrendUp && rsi > 35 && rsi < 52 && currentHist > prevHist;
+    const pullbackDown = isMacroDown && microTrendDown && rsi < 65 && rsi > 48 && currentHist < prevHist;
+
+    // ==========================================
+    // STRATEGY B: THE MOMENTUM BREAKOUT
+    // ==========================================
+    // Requires a volume surge, increasing momentum, and strong micro-trend alignment
+    const breakoutUp = microTrendUp && rvol > 1.4 && currentHist > 0 && currentHist > prevHist && currentClose > currentOpen;
+    const breakoutDown = microTrendDown && rvol > 1.4 && currentHist < 0 && currentHist < prevHist && currentClose < currentOpen;
+
+
+    // --- EVALUATE TRIGGERS ---
+    if (pullbackUp || breakoutUp) {
         pred = "UP";
-    } 
-    // DOWN Trade: Trend is Bearish, RSI is somewhat overbought (> 52), and MACD is ticking down
-    else if (isTrending && isMacroDown && rsi > 52 && currentHist < prevHist) {
+        strategyTriggered = breakoutUp ? "BREAKOUT" : "PULLBACK";
+    } else if (pullbackDown || breakoutDown) {
         pred = "DOWN";
+        strategyTriggered = breakoutDown ? "BREAKOUT" : "PULLBACK";
     }
 
-    // --- 🛡️ VETO SYSTEMS ---
+    // --- 🛡️ BARE MINIMUM VETO SYSTEMS ---
+    // Drastically reduced vetos to allow more trade flow
     let isVetoed = false;
-    if (isWhipsaw) isVetoed = true;            
-    if (atrPercentage < 0.05) isVetoed = true; 
+    
+    // Only veto Whipsaw if we are trying to trade a pullback. Breakouts inherently break whipsaws.
+    if (isWhipsaw && strategyTriggered === "PULLBACK") isVetoed = true;            
+    
+    // Widen ATR threshold. Allow tighter trades.
+    if (atrPercentage < 0.04) isVetoed = true; 
 
     if (isVetoed) return { pred: "SKIP", conf: 0 };
 
-    // --- 📊 CONFLUENCE CONFIDENCE SCORING ---
-    let conf = 45.0; 
+    // --- 📊 DYNAMIC CONFIDENCE SCORING ---
+    let conf = 48.0; // Start closer to the execution threshold
     
-    if (pred === "UP" && emaFast > emaSlow) conf += 5.0;
-    if (pred === "DOWN" && emaFast < emaSlow) conf += 5.0;
+    if (pred === "UP" && lowerWick > bodySize) conf += 3.0;
+    if (pred === "DOWN" && upperWick > bodySize) conf += 3.0;
 
-    if (pred === "UP" && lowerWick > (bodySize * 1.5)) conf += 4.0;
-    if (pred === "DOWN" && upperWick > (bodySize * 1.5)) conf += 4.0;
-
-    // Softened the low-volume penalty slightly so we don't kill average-volume trades
-    if (rvol < 0.7) conf -= 6.0;
-    if (rvol > 1.3) conf += 4.0; 
-
-    if (atrPercentage > settings.volatility_threshold) {
-        conf -= 5.0; 
-    } else {
-        conf += 2.0;
-    }
+    // Extra confidence for exceptionally high volume during breakouts
+    if (strategyTriggered === "BREAKOUT" && rvol > 2.0) conf += 4.0; 
+    
+    // Penalize if volatility is so insane it will knock out your SL via spread
+    if (atrPercentage > 0.20) conf -= 5.0; 
 
     if (conf < settings.base_confidence) return { pred: "SKIP", conf };
 
     return { pred, conf };
 }
+
 
 
 async function runBacktest() {
