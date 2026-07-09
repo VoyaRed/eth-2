@@ -65,9 +65,8 @@ const calculateRSI = (closes) => {
     return rsi;
 };
 
-// Optimized Core Engine Simulator - Sniper Edition
+// Optimized Core Engine Simulator - Balanced Flow Edition
 function simulatePrediction(candles) {
-    // INCREASED HORIZON: Require 200 candles for proper EMA/RSI stabilization
     if (candles.length < 200) return { pred: "SKIP", conf: 0 };
 
     const opens = candles.map(c => parseFloat(c[1]));
@@ -121,28 +120,28 @@ function simulatePrediction(candles) {
     }
     const atrPercentage = ((trSum / 14) / currentClose) * 100;
 
-    // --- 🎯 TREND STRENGTH CALCULATION ---
-    // Measure the distance between the macro EMAs. If it's too small, the market is flat.
+    // --- 🎯 RELAXED TREND STRENGTH CALCULATION ---
+    // Lowered the gap requirement from 0.0008 to 0.0003
     const macroTrendGap = Math.abs(macroEmaFast - macroEmaSlow) / currentClose;
-    const isTrending = macroTrendGap > 0.0008; // Requires at least a 0.08% gap between EMAs
+    const isTrending = macroTrendGap > 0.0003; 
 
     let pred = "SKIP";
     const isMacroUp = macroEmaFast > macroEmaSlow;
     const isMacroDown = macroEmaFast < macroEmaSlow;
 
-    // UP Trade: Strong Bull Trend + Deep Pullback (RSI < 45) + MACD was negative but is now curling up
-    if (isTrending && isMacroUp && rsi < 45 && currentHist < 0 && currentHist > prevHist) {
+    // UP Trade: Trend is Bullish, RSI is somewhat cooled (< 48), and MACD is ticking up
+    if (isTrending && isMacroUp && rsi < 48 && currentHist > prevHist) {
         pred = "UP";
     } 
-    // DOWN Trade: Strong Bear Trend + Deep Overbought (RSI > 55) + MACD was positive but is now curling down
-    else if (isTrending && isMacroDown && rsi > 55 && currentHist > 0 && currentHist < prevHist) {
+    // DOWN Trade: Trend is Bearish, RSI is somewhat overbought (> 52), and MACD is ticking down
+    else if (isTrending && isMacroDown && rsi > 52 && currentHist < prevHist) {
         pred = "DOWN";
     }
 
-    // --- 🛡️ EXTREMELY STRICT VETO SYSTEMS ---
+    // --- 🛡️ VETO SYSTEMS ---
     let isVetoed = false;
     if (isWhipsaw) isVetoed = true;            
-    if (atrPercentage < 0.05) isVetoed = true; // Spreads will kill you here
+    if (atrPercentage < 0.05) isVetoed = true; 
 
     if (isVetoed) return { pred: "SKIP", conf: 0 };
 
@@ -155,8 +154,8 @@ function simulatePrediction(candles) {
     if (pred === "UP" && lowerWick > (bodySize * 1.5)) conf += 4.0;
     if (pred === "DOWN" && upperWick > (bodySize * 1.5)) conf += 4.0;
 
-    // Reject trades taking place on dead volume
-    if (rvol < 0.8) conf -= 10.0;
+    // Softened the low-volume penalty slightly so we don't kill average-volume trades
+    if (rvol < 0.7) conf -= 6.0;
     if (rvol > 1.3) conf += 4.0; 
 
     if (atrPercentage > settings.volatility_threshold) {
