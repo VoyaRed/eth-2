@@ -65,7 +65,7 @@ const calculateRSI = (closes) => {
     return rsi;
 };
 
-// Core Engine Simulator
+// Optimized Core Engine Simulator
 function simulatePrediction(candles) {
     if (candles.length < 50) return { pred: "SKIP", conf: 0 };
 
@@ -75,11 +75,12 @@ function simulatePrediction(candles) {
     const closes = candles.map(c => parseFloat(c[4]));
     const volumes = candles.map(c => parseFloat(c[5]));
 
-    const currentClose = closes[closes.length - 1];
-    const prevOpen = opens[opens.length - 2];
-    const prevClose = closes[closes.length - 2];
-    const prevHigh = highs[highs.length - 2];
-    const prevLow = lows[lows.length - 2];
+    // INDEX FIX: length - 1 represents the absolute most recently closed 5m candle
+    const idx = closes.length - 1; 
+    const currentClose = closes[idx];
+    const currentOpen = opens[idx];
+    const currentHigh = highs[idx];
+    const currentLow = lows[idx];
 
     const rsi = calculateRSI(closes);
     
@@ -98,10 +99,11 @@ function simulatePrediction(candles) {
     const volSMA20 = volumes.slice(-20).reduce((a,b)=>a+b,0) / 20;
     const rvol = volumes[volumes.length - 1] / volSMA20;
 
-    const upperWick = prevHigh - Math.max(prevOpen, prevClose);
-    const lowerWick = Math.min(prevOpen, prevClose) - prevLow;
-    const bodySize = Math.max(Math.abs(prevClose - prevOpen), 0.0001);
+    const upperWick = currentHigh - Math.max(currentOpen, currentClose);
+    const lowerWick = Math.min(currentOpen, currentClose) - currentLow;
+    const bodySize = Math.max(Math.abs(currentClose - currentOpen), 0.0001);
 
+    // Track market chop
     let colorFlips = 0;
     for (let i = closes.length - 1; i >= closes.length - 4; i--) {
         const currentColor = closes[i] >= opens[i] ? 'green' : 'red';
@@ -119,48 +121,59 @@ function simulatePrediction(candles) {
     }
     const atrPercentage = ((trSum / 14) / currentClose) * 100;
 
+    // --- 🎯 SMARTER DIRECTIONAL BIAS (Trend-Aligned Reversals) ---
     let pred = "SKIP";
-    
-    if (rsi < 43) {
-        pred = "UP"; 
-    } else if (rsi > 57) {
-        pred = "DOWN"; 
-    } else {
-        return { pred: "SKIP", conf: 0 };
+    const isMacroUp = macroEmaFast > macroEmaSlow;
+    const isMacroDown = macroEmaFast < macroEmaSlow;
+
+    // UP Trade Condition: Macro Trend is Bullish, short term is cooled off (RSI < 50), AND MACD momentum shifts upward
+    if (isMacroUp && rsi < 50 && currentHist > prevHist) {
+        pred = "UP";
+    } 
+    // DOWN Trade Condition: Macro Trend is Bearish, short term is overextended (RSI > 50), AND MACD momentum shifts downward
+    else if (isMacroDown && rsi > 50 && currentHist < prevHist) {
+        pred = "DOWN";
     }
 
+    // --- 🛡️ EXTREMELY STRICT VETO SYSTEMS ---
     let isVetoed = false;
-    if (pred === "UP" && currentHist < -0.1 && currentHist < prevHist) isVetoed = true;
-    if (pred === "DOWN" && currentHist > 0.1 && currentHist > prevHist) isVetoed = true;
-    if (atrPercentage < 0.05) isVetoed = true; 
+    
+    if (isWhipsaw) isVetoed = true;            // Veto out sideways consolidation chop entirely
+    if (atrPercentage < 0.06) isVetoed = true; // Veto low volume/dead hours where spreads eat you alive
+
+    // Prevent forcing entries if momentum is completely underwater
+    if (pred === "UP" && currentHist < 0 && currentHist < prevHist) isVetoed = true;
+    if (pred === "DOWN" && currentHist > 0 && currentHist > prevHist) isVetoed = true;
 
     if (isVetoed) return { pred: "SKIP", conf: 0 };
 
+    // --- 📊 CONFLUENCE CONFIDENCE SCORING ---
     let conf = 45.0; 
     
-    if (pred === "UP" && macroEmaFast > macroEmaSlow) conf += 6.0;
-    if (pred === "DOWN" && macroEmaFast < macroEmaSlow) conf += 6.0;
+    // 1. Micro-trend alignment acceleration
+    if (pred === "UP" && emaFast > emaSlow) conf += 5.0;
+    if (pred === "DOWN" && emaFast < emaSlow) conf += 5.0;
 
-    if (pred === "UP" && emaFast > emaSlow) conf += 4.0;
-    if (pred === "DOWN" && emaFast < emaSlow) conf += 4.0;
+    // 2. Pure candlestick structural confirmations (Hammer/Shooting Star checking)
+    if (pred === "UP" && lowerWick > (bodySize * 1.5)) conf += 4.0;
+    if (pred === "DOWN" && upperWick > (bodySize * 1.5)) conf += 4.0;
 
-    if (pred === "UP" && lowerWick > bodySize) conf += 3.0;
-    if (pred === "DOWN" && upperWick > bodySize) conf += 3.0;
+    // 3. Relative Volume confirmation (Ensure big players are backing the move)
+    if (rvol > 1.3) conf += 3.0;
+    if (rvol > 2.2) conf += 5.0; 
 
-    if (rvol > settings.rvol_threshold) conf += 3.0; 
-    
+    // 4. Volatility boundaries
     if (atrPercentage > settings.volatility_threshold) {
-        conf -= 6.0;
+        conf -= 5.0; // De-prioritize trades when candles are too wild for a tight 0.5% boundary
     } else {
         conf += 2.0;
     }
-    
-    if (isWhipsaw) conf -= 6.0; 
 
     if (conf < settings.base_confidence) return { pred: "SKIP", conf };
 
     return { pred, conf };
 }
+
 
 async function runBacktest() {
     // Shared reference updated during proxy rotation loops
