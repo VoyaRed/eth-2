@@ -32,11 +32,10 @@ const settings = {
 
 // --- Crypto.com UpDown Boundary Mechanics ---
 const riskSettings = {
-    takeProfitPerc: 0.005, // 0.5% Target (Ceiling/Floor Knockout)
-    stopLossPerc: 0.005,   // 0.5% Stop (Ceiling/Floor Knockout)
-    slippagePerc: 0.0005   // 0.05% assumed entry slippage 
+    takeProfitPerc: 0.005,  // 0.5% Target (Ceiling/Floor Knockout)
+    stopLossPerc: 0.0075,   // 0.75% Stop (Widens risk to absorb 5m noise)
+    slippagePerc: 0.0005    // 0.05% assumed entry slippage 
 };
-
 // Math Helpers
 const calculateEMAArray = (data, period) => {
     const k = 2 / (period + 1);
@@ -130,18 +129,17 @@ function simulatePrediction(candles) {
     let strategyTriggered = "";
 
     // ==========================================
-    // STRATEGY A: THE PULLBACK SNIPER
+    // STRATEGY A: THE PULLBACK SNIPER (Widened RSI Net)
     // ==========================================
-    const pullbackUp = isMacroUp && microTrendUp && rsi > 35 && rsi < 52 && currentHist > prevHist;
-    const pullbackDown = isMacroDown && microTrendDown && rsi < 65 && rsi > 48 && currentHist < prevHist;
+    const pullbackUp = isMacroUp && microTrendUp && rsi > 30 && rsi < 58 && currentHist > prevHist;
+    const pullbackDown = isMacroDown && microTrendDown && rsi < 70 && rsi > 42 && currentHist < prevHist;
 
     // ==========================================
-    // STRATEGY B: THE MOMENTUM BREAKOUT
+    // STRATEGY B: THE MOMENTUM BREAKOUT (Added Macro Alignment)
     // ==========================================
-    // Requires a volume surge, increasing momentum, and strong micro-trend alignment
-    const breakoutUp = microTrendUp && rvol > 1.4 && currentHist > 0 && currentHist > prevHist && currentClose > currentOpen;
-    const breakoutDown = microTrendDown && rvol > 1.4 && currentHist < 0 && currentHist < prevHist && currentClose < currentOpen;
-
+    // Breakouts now MUST align with the macro trend to avoid bull/bear traps
+    const breakoutUp = isMacroUp && microTrendUp && rvol > 1.3 && currentHist > 0 && currentHist > prevHist && currentClose > currentOpen;
+    const breakoutDown = isMacroDown && microTrendDown && rvol > 1.3 && currentHist < 0 && currentHist < prevHist && currentClose < currentOpen;
 
     // --- EVALUATE TRIGGERS ---
     if (pullbackUp || breakoutUp) {
@@ -153,25 +151,29 @@ function simulatePrediction(candles) {
     }
 
     // --- 🛡️ BARE MINIMUM VETO SYSTEMS ---
-    // Drastically reduced vetos to allow more trade flow
     let isVetoed = false;
     
-    // Only veto Whipsaw if we are trying to trade a pullback. Breakouts inherently break whipsaws.
+    // Only veto Whipsaw if we are trying to trade a pullback.
     if (isWhipsaw && strategyTriggered === "PULLBACK") isVetoed = true;            
     
-    // Widen ATR threshold. Allow tighter trades.
+    // Avoid absolutely dead markets
     if (atrPercentage < 0.04) isVetoed = true; 
 
     if (isVetoed) return { pred: "SKIP", conf: 0 };
 
     // --- 📊 DYNAMIC CONFIDENCE SCORING ---
-    let conf = 48.0; // Start closer to the execution threshold
+    let conf = 48.0; 
     
-    if (pred === "UP" && lowerWick > bodySize) conf += 3.0;
-    if (pred === "DOWN" && upperWick > bodySize) conf += 3.0;
+    // 1. Reward perfect dual-trend alignment
+    if (isMacroUp && microTrendUp && pred === "UP") conf += 1.5;
+    if (isMacroDown && microTrendDown && pred === "DOWN") conf += 1.5;
 
-    // Extra confidence for exceptionally high volume during breakouts
-    if (strategyTriggered === "BREAKOUT" && rvol > 2.0) conf += 4.0; 
+    // 2. Reward Price Action (Relaxed Wick Logic to catch more plays)
+    if (pred === "UP" && lowerWick > (bodySize * 0.7)) conf += 2.0;
+    if (pred === "DOWN" && upperWick > (bodySize * 0.7)) conf += 2.0;
+
+    // 3. Reward Volume (Slightly easier threshold for breakout validation)
+    if (strategyTriggered === "BREAKOUT" && rvol > 1.6) conf += 3.5; 
     
     // Penalize if volatility is so insane it will knock out your SL via spread
     if (atrPercentage > 0.20) conf -= 5.0; 
@@ -180,7 +182,6 @@ function simulatePrediction(candles) {
 
     return { pred, conf };
 }
-
 
 
 async function runBacktest() {
