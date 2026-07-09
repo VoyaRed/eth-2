@@ -1,17 +1,17 @@
 {
-  "name": "ethere-bot",
+  "name": "crypto-updown-backtester",
   "version": "1.0.0",
+  "description": "Historical forward-testing engine for Crypto.com UpDown Options",
   "main": "backtester_2.js",
-  "dependencies": {
-    "undici": "^8.6.0",
-    "ws": "^8.13.0",
-    "@supabase/supabase-js": "^2.0.0",
-    "node-fetch": "^2.7.0",
-    "ccxt": "^4.5.63",
-    "impit": "^0.14.2",
-    "ethers": "^5.7.2"
-  },
   "scripts": {
     "start": "node backtester_2.js"
+  },
+  "dependencies": {
+    "ccxt": "^4.5.63",
+    "impit": "^0.14.2",
+    "undici": "^8.6.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
