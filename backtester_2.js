@@ -150,7 +150,7 @@ function simulatePrediction(candles) {
 async function runBacktest() {
     const impersonator = new Impit({ 
         browser: 'chrome',
-        proxyUrl: 'http://zirrujpi-ch-city_wettingen-954674:8e2wprq017db@p.webshare.io:80' 
+        proxyUrl: 'http://zirrujpi-us-935925:8e2wprq017db@p.webshare.io:80' 
     });
 
     try {
