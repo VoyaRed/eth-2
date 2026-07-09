@@ -3,6 +3,21 @@ const ccxt = require('ccxt');
 const { Impit } = require('impit');
 const http = require('http'); 
 
+// --- 🌐 PROXY CONFIGURATION POOL ---
+// Replace placeholders with your actual Webshare (or other) credentials
+const PROXY_POOL = [
+    'http://zirrujpi-ch-532845:8e2wprq017db@p.webshare.io:80',
+    'http://zirrujpi-ch-532846:8e2wprq017db@p.webshare.io:80',
+    'http://zirrujpi-ch-532847:8e2wprq017db@p.webshare.io:80',
+    'http://zirrujpi-ch-532848:8e2wprq017db@p.webshare.io:80',
+    'http://zirrujpi-ch-532849:8e2wprq017db@p.webshare.io:80',
+    'http://zirrujpi-ch-532850:8e2wprq017db@p.webshare.io:80',
+    'http://zirrujpi-ch-532851:8e2wprq017db@p.webshare.io:80',
+    'http://zirrujpi-ch-532852:8e2wprq017db@p.webshare.io:80',
+    'http://zirrujpi-ch-532853:8e2wprq017db@p.webshare.io:80',
+    'http://zirrujpi-ch-532854:8e2wprq017db@p.webshare.io:80'                             // Proxy 10
+];
+
 // Your static weights from Supabase
 const settings = {
     ema_fast_period: 5, ema_slow_period: 13,
@@ -148,36 +163,16 @@ function simulatePrediction(candles) {
 }
 
 async function runBacktest() {
-    const impersonator = new Impit({ 
-        browser: 'chrome',
-        proxyUrl: 'http://zirrujpi-us-rotate:8e2wprq017db@p.webshare.io:80' 
-    });
+    // Shared reference updated during proxy rotation loops
+    let activeImpersonator = null;
 
-    try {
-        console.log("🌐 Verifying connection routing...");
-        const res = await impersonator.fetch('https://api.ipify.org?format=json');
-        
-        if (!res.ok) {
-            console.error(`❌ Proxy check failed with HTTP status: ${res.status}`);
-            return;
-        }
-
-        const data = await res.json();
-        console.log("✅ Current Bot IP:", data.ip);
-    } catch (err) {
-        console.error("❌ Failed to verify proxy IP. Check credentials:", err.message);
-        return; 
-    }
-
-    console.log("📥 Fetching historical 5m candles for ETH/USDT...");
-    
-        // --- 🛡️ THE FIX: BULLETPROOF FETCH WRAPPER ---
+    // --- 🛡️ THE FIX: DYNAMIC ROTATING FETCH WRAPPER ---
     const safeFetch = async (url, options = {}) => {
+        if (!activeImpersonator) {
+            return new Response(JSON.stringify({ error: "No active proxy session configured." }), { status: 500 });
+        }
         try {
-            // 1. Ensure options.headers exists
             options.headers = options.headers || {};
-            
-            // 2. Inject realistic browser headers without overwriting CCXT's mandatory headers
             Object.assign(options.headers, {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 'Accept': 'application/json, text/plain, */*',
@@ -187,60 +182,102 @@ async function runBacktest() {
                 'Sec-Ch-Ua-Platform': '"Windows"',
                 'Sec-Fetch-Dest': 'empty',
                 'Sec-Fetch-Mode': 'cors',
-                'Sec-Fetch-Site': 'same-site',
-                'Origin': 'https://crypto.com',
-                'Referer': 'https://crypto.com/'
+                'Sec-Fetch-Site': 'same-site'
             });
-
-            return await impersonator.fetch(url, options);
+            return await activeImpersonator.fetch(url, options);
         } catch (err) {
-            console.log(`⚠️ Network blip intercepted: ${err.message}`);
+            console.log(`⚠️ Proxy connection issue handled: ${err.message}`);
             return new Response(JSON.stringify({ error: err.message }), { 
                 status: 502, 
-                statusText: "Bad Gateway - Proxy Intercept" 
+                statusText: "Bad Gateway - Proxy Rotator Intercept" 
             });
         }
     };
     
-    // Adding standard dummy classes just to be extra secure
     class DummyFetchError extends Error {}
     safeFetch.FetchError = DummyFetchError;
     safeFetch.Headers = globalThis.Headers || Map;
     safeFetch.Request = globalThis.Request || Object;
     safeFetch.Response = globalThis.Response || Object;
 
-
-    const exchange = new ccxt.cryptocom({
+    // Instantiating standard CCXT Binance client with our custom dynamic fetcher
+    const exchange = new ccxt.binance({
         fetchImplementation: safeFetch,
         enableRateLimit: true 
     });
-    // ----------------------------------------------
     
     let allCandles = [];
-    let since = exchange.milliseconds() - (3000 * 5 * 60 * 1000); 
+    
+    // Calculate full lookback required (10 proxies * 5000 candles = 50,000 candles back)
+    const overallCandleTarget = PROXY_POOL.length * 5000;
+    let since = exchange.milliseconds() - (overallCandleTarget * 5 * 60 * 1000); 
 
-    try {
-        while (allCandles.length < 3000) {
-            // Passing a specific limit (200) to speed up pagination safely 
-            const batch = await exchange.fetchOHLCV('ETH/USDT', '5m', since, 200);
-            
-            if (!batch || batch.length === 0) break;
-            
-            allCandles = allCandles.concat(batch);
-            since = batch[batch.length - 1][0] + 1;
-            console.log(`...fetched ${allCandles.length} candles`);
-            
-            // Adding a safe sleep to prevent the proxy from rate-limiting
-            await new Promise(r => setTimeout(r, 1200));
+    console.log(`🚀 Starting execution over ${PROXY_POOL.length} configured proxies. Target: ${overallCandleTarget} candles...`);
+
+    // --- 🔄 ROTATION LOOP ---
+    for (let i = 0; i < PROXY_POOL.length; i++) {
+        const currentProxyUrl = PROXY_POOL[i];
+        const proxyLabel = currentProxyUrl.includes('@') ? currentProxyUrl.split('@')[1] : currentProxyUrl;
+        
+        console.log(`\n⚙️ [Proxy ${i + 1}/${PROXY_POOL.length}] Connecting to tunnel via: ${proxyLabel}`);
+        
+        activeImpersonator = new Impit({ 
+            browser: 'chrome',
+            proxyUrl: currentProxyUrl 
+        });
+
+        // Verify routing IP
+        try {
+            const res = await activeImpersonator.fetch('https://api.ipify.org?format=json');
+            if (!res.ok) throw new Error(`Status ${res.status}`);
+            const ipData = await res.json();
+            console.log(`✅ Connection confirmed. Exit IP: ${ipData.ip}`);
+        } catch (err) {
+            console.error(`❌ Proxy ${i + 1} validation failed (${err.message}). Advancing to next available proxy.`);
+            continue; 
         }
-    } catch (e) {
-        console.log("Fetch Error (Safely Caught):", e.message);
+
+        let proxyFetchedCount = 0;
+        
+        // Pull 5000 candles with current proxy in 1000-candle increments
+        while (proxyFetchedCount < 5000) {
+            try {
+                // Requesting maximum permitted candle block size allowed by Binance (1000 candles)
+                const batch = await exchange.fetchOHLCV('ETH/USDT', '5m', since, 1000);
+                
+                if (!batch || batch.length === 0) {
+                    console.log("ℹ️ No further historical candles exposed by endpoint.");
+                    break;
+                }
+                
+                allCandles = allCandles.concat(batch);
+                proxyFetchedCount += batch.length;
+                since = batch[batch.length - 1][0] + 1; // Update pagination pointer
+                
+                console.log(`   📥 Extracted batch of ${batch.length} candles. (Proxy Progress: ${proxyFetchedCount}/5000 | Dataset Total: ${allCandles.length})`);
+                
+                if (batch.length < 1000) {
+                    console.log("ℹ️ Reached current real-time data timeline.");
+                    break;
+                }
+                
+                // Keep rate limits clean
+                await new Promise(r => setTimeout(r, 1100));
+            } catch (e) {
+                console.log(`⚠️ Execution Exception experienced on Proxy ${i + 1}:`, e.message);
+                break; // Escape inner loop to trigger fallback to next proxy pool asset
+            }
+        }
+        
+        if (since > exchange.milliseconds()) break; 
     }
 
     if (allCandles.length < 50) {
-        console.log("❌ Not enough candles fetched to run a backtest. Please check your proxy credentials or connection limit.");
+        console.log("❌ Matrix initialization failed. Insufficient dataset depth to construct backtest state engines.");
         return;
     }
+
+    console.log(`\n🎉 Success! Combined a aggregate historical dataset of ${allCandles.length} candles.`);
 
     const splitIndex = Math.floor(allCandles.length * 0.7);
     const inSample = allCandles.slice(0, splitIndex);
@@ -324,7 +361,7 @@ async function runBacktest() {
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('Crypto.com Backtester is alive! Check your Render Logs to see the results.\n');
+    res.end('Binance Data / Crypto.com UpDown Simulator is online! View Render runtime logs for metrics output.\n');
 }).listen(PORT, '0.0.0.0', () => {
     console.log(`🟢 Dummy web server bound to port ${PORT} on 0.0.0.0. Render Health Checks will pass!`);
     runBacktest().catch(console.error);
