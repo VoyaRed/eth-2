@@ -157,7 +157,6 @@ async function runBacktest() {
         console.log("🌐 Verifying connection routing...");
         const res = await impersonator.fetch('https://api.ipify.org?format=json');
         
-        // Ensure proxy authentication actually succeeded before mapping to JSON
         if (!res.ok) {
             console.error(`❌ Proxy check failed with HTTP status: ${res.status}`);
             return;
@@ -172,17 +171,27 @@ async function runBacktest() {
 
     console.log("📥 Fetching historical 5m candles for ETH/USDT...");
     
+    // --- FIXED CCXT INSTANCEOF BUG ---
+    const safeFetch = async (url, options) => {
+        return await impersonator.fetch(url, options);
+    };
+    
+    // Attach expected globals so ccxt's internal checks do not evaluate to undefined
+    safeFetch.FetchError = Error;
+    safeFetch.Headers = globalThis.Headers;
+    safeFetch.Request = globalThis.Request;
+    safeFetch.Response = globalThis.Response;
+
     const exchange = new ccxt.cryptocom({
-        fetchImplementation: impersonator.fetch.bind(impersonator)
+        fetchImplementation: safeFetch
     });
+    // ---------------------------------
     
     let allCandles = [];
     let since = exchange.milliseconds() - (3000 * 5 * 60 * 1000); 
 
     try {
         while (allCandles.length < 3000) {
-            // FIXED: Using ETH/USDT as standard base pairing to avoid Symbol NotFound exceptions.
-            // FIXED: Omitted the 1000 limit parameter to let CCXT safely enforce the API's pagination limits.
             const batch = await exchange.fetchOHLCV('ETH/USDT', '5m', since);
             
             if (batch.length === 0) break;
@@ -197,7 +206,6 @@ async function runBacktest() {
         console.log("Fetch Error:", e.message);
     }
 
-    // Safety guard to prevent slicing logic failure if fetch errors out entirely
     if (allCandles.length < 50) {
         console.log("❌ Not enough candles fetched to run a backtest. Please check your proxy proxy credentials or connection limit.");
         return;
@@ -265,6 +273,32 @@ async function runBacktest() {
                     entry: entryPrice,
                     tp: entryPrice * (1 - riskSettings.takeProfitPerc),
                     sl: entryPrice * (1 + riskSettings.stopLossPerc)
+                };
+            }
+        }
+
+        const totalTrades = wins + losses;
+        const winRate = totalTrades > 0 ? ((wins / totalTrades) * 100).toFixed(2) : 0;
+        
+        console.log(`\n📊 --- ${phaseName} RESULTS ---`);
+        console.log(`Total Trades Executed: ${totalTrades}`);
+        console.log(`Wins: ${wins} | Losses: ${losses} | Skipped: ${skips}`);
+        console.log(`Strict Win Rate: ${winRate}%`);
+    };
+
+    testPhase(inSample, "IN-SAMPLE (Sandbox Phase)");
+    testPhase(outOfSample, "OUT-OF-SAMPLE (Lie Detector Phase)");
+}
+
+const PORT = process.env.PORT || 3000;
+http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('Crypto.com Backtester is alive! Check your Render Logs to see the results.\n');
+}).listen(PORT, '0.0.0.0', () => {
+    console.log(`🟢 Dummy web server bound to port ${PORT} on 0.0.0.0. Render Health Checks will pass!`);
+    runBacktest().catch(console.error);
+});
+ (1 + riskSettings.stopLossPerc)
                 };
             }
         }
