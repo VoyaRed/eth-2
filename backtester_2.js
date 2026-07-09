@@ -150,7 +150,7 @@ function simulatePrediction(candles) {
 async function runBacktest() {
     const impersonator = new Impit({ 
         browser: 'chrome',
-        proxyUrl: 'http://zirrujpi-us-935925:8e2wprq017db@p.webshare.io:80' 
+        proxyUrl: 'http://zirrujpi-us-rotate:8e2wprq017db@p.webshare.io:80' 
     });
 
     try {
@@ -171,14 +171,29 @@ async function runBacktest() {
 
     console.log("📥 Fetching historical 5m candles for ETH/USDT...");
     
-    // --- 🛡️ THE FIX: BULLETPROOF FETCH WRAPPER ---
-    const safeFetch = async (url, options) => {
+        // --- 🛡️ THE FIX: BULLETPROOF FETCH WRAPPER ---
+    const safeFetch = async (url, options = {}) => {
         try {
+            // 1. Ensure options.headers exists
+            options.headers = options.headers || {};
+            
+            // 2. Inject realistic browser headers without overwriting CCXT's mandatory headers
+            Object.assign(options.headers, {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'application/json, text/plain, */*',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+                'Sec-Ch-Ua-Mobile': '?0',
+                'Sec-Ch-Ua-Platform': '"Windows"',
+                'Sec-Fetch-Dest': 'empty',
+                'Sec-Fetch-Mode': 'cors',
+                'Sec-Fetch-Site': 'same-site',
+                'Origin': 'https://crypto.com',
+                'Referer': 'https://crypto.com/'
+            });
+
             return await impersonator.fetch(url, options);
         } catch (err) {
-            // We intercept the raw proxy/socket error before CCXT sees it.
-            // By returning a formatted 502 Bad Gateway response instead of throwing, 
-            // we bypass the `instanceof` check completely. CCXT handles this gracefully!
             console.log(`⚠️ Network blip intercepted: ${err.message}`);
             return new Response(JSON.stringify({ error: err.message }), { 
                 status: 502, 
@@ -193,6 +208,7 @@ async function runBacktest() {
     safeFetch.Headers = globalThis.Headers || Map;
     safeFetch.Request = globalThis.Request || Object;
     safeFetch.Response = globalThis.Response || Object;
+
 
     const exchange = new ccxt.cryptocom({
         fetchImplementation: safeFetch,
