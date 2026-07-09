@@ -65,9 +65,10 @@ const calculateRSI = (closes) => {
     return rsi;
 };
 
-// Optimized Core Engine Simulator
+// Optimized Core Engine Simulator - Sniper Edition
 function simulatePrediction(candles) {
-    if (candles.length < 50) return { pred: "SKIP", conf: 0 };
+    // INCREASED HORIZON: Require 200 candles for proper EMA/RSI stabilization
+    if (candles.length < 200) return { pred: "SKIP", conf: 0 };
 
     const opens = candles.map(c => parseFloat(c[1]));
     const highs = candles.map(c => parseFloat(c[2]));
@@ -75,7 +76,6 @@ function simulatePrediction(candles) {
     const closes = candles.map(c => parseFloat(c[4]));
     const volumes = candles.map(c => parseFloat(c[5]));
 
-    // INDEX FIX: length - 1 represents the absolute most recently closed 5m candle
     const idx = closes.length - 1; 
     const currentClose = closes[idx];
     const currentOpen = opens[idx];
@@ -93,17 +93,17 @@ function simulatePrediction(candles) {
     const ema26 = calculateEMAArray(closes, 26);
     const macdLine = ema12.map((v, i) => v - ema26[i]);
     const signalLine = calculateEMAArray(macdLine, 9);
-    const currentHist = macdLine[macdLine.length - 1] - signalLine[signalLine.length - 1];
-    const prevHist = macdLine[macdLine.length - 2] - signalLine[signalLine.length - 2];
+    
+    const currentHist = macdLine[idx] - signalLine[idx];
+    const prevHist = macdLine[idx - 1] - signalLine[idx - 1];
 
     const volSMA20 = volumes.slice(-20).reduce((a,b)=>a+b,0) / 20;
-    const rvol = volumes[volumes.length - 1] / volSMA20;
+    const rvol = volumes[idx] / volSMA20;
 
     const upperWick = currentHigh - Math.max(currentOpen, currentClose);
     const lowerWick = Math.min(currentOpen, currentClose) - currentLow;
     const bodySize = Math.max(Math.abs(currentClose - currentOpen), 0.0001);
 
-    // Track market chop
     let colorFlips = 0;
     for (let i = closes.length - 1; i >= closes.length - 4; i--) {
         const currentColor = closes[i] >= opens[i] ? 'green' : 'red';
@@ -121,50 +121,46 @@ function simulatePrediction(candles) {
     }
     const atrPercentage = ((trSum / 14) / currentClose) * 100;
 
-    // --- 🎯 SMARTER DIRECTIONAL BIAS (Trend-Aligned Reversals) ---
+    // --- 🎯 TREND STRENGTH CALCULATION ---
+    // Measure the distance between the macro EMAs. If it's too small, the market is flat.
+    const macroTrendGap = Math.abs(macroEmaFast - macroEmaSlow) / currentClose;
+    const isTrending = macroTrendGap > 0.0008; // Requires at least a 0.08% gap between EMAs
+
     let pred = "SKIP";
     const isMacroUp = macroEmaFast > macroEmaSlow;
     const isMacroDown = macroEmaFast < macroEmaSlow;
 
-    // UP Trade Condition: Macro Trend is Bullish, short term is cooled off (RSI < 50), AND MACD momentum shifts upward
-    if (isMacroUp && rsi < 50 && currentHist > prevHist) {
+    // UP Trade: Strong Bull Trend + Deep Pullback (RSI < 45) + MACD was negative but is now curling up
+    if (isTrending && isMacroUp && rsi < 45 && currentHist < 0 && currentHist > prevHist) {
         pred = "UP";
     } 
-    // DOWN Trade Condition: Macro Trend is Bearish, short term is overextended (RSI > 50), AND MACD momentum shifts downward
-    else if (isMacroDown && rsi > 50 && currentHist < prevHist) {
+    // DOWN Trade: Strong Bear Trend + Deep Overbought (RSI > 55) + MACD was positive but is now curling down
+    else if (isTrending && isMacroDown && rsi > 55 && currentHist > 0 && currentHist < prevHist) {
         pred = "DOWN";
     }
 
     // --- 🛡️ EXTREMELY STRICT VETO SYSTEMS ---
     let isVetoed = false;
-    
-    if (isWhipsaw) isVetoed = true;            // Veto out sideways consolidation chop entirely
-    if (atrPercentage < 0.06) isVetoed = true; // Veto low volume/dead hours where spreads eat you alive
-
-    // Prevent forcing entries if momentum is completely underwater
-    if (pred === "UP" && currentHist < 0 && currentHist < prevHist) isVetoed = true;
-    if (pred === "DOWN" && currentHist > 0 && currentHist > prevHist) isVetoed = true;
+    if (isWhipsaw) isVetoed = true;            
+    if (atrPercentage < 0.05) isVetoed = true; // Spreads will kill you here
 
     if (isVetoed) return { pred: "SKIP", conf: 0 };
 
     // --- 📊 CONFLUENCE CONFIDENCE SCORING ---
     let conf = 45.0; 
     
-    // 1. Micro-trend alignment acceleration
     if (pred === "UP" && emaFast > emaSlow) conf += 5.0;
     if (pred === "DOWN" && emaFast < emaSlow) conf += 5.0;
 
-    // 2. Pure candlestick structural confirmations (Hammer/Shooting Star checking)
     if (pred === "UP" && lowerWick > (bodySize * 1.5)) conf += 4.0;
     if (pred === "DOWN" && upperWick > (bodySize * 1.5)) conf += 4.0;
 
-    // 3. Relative Volume confirmation (Ensure big players are backing the move)
-    if (rvol > 1.3) conf += 3.0;
-    if (rvol > 2.2) conf += 5.0; 
+    // Reject trades taking place on dead volume
+    if (rvol < 0.8) conf -= 10.0;
+    if (rvol > 1.3) conf += 4.0; 
 
-    // 4. Volatility boundaries
     if (atrPercentage > settings.volatility_threshold) {
-        conf -= 5.0; // De-prioritize trades when candles are too wild for a tight 0.5% boundary
+        conf -= 5.0; 
     } else {
         conf += 2.0;
     }
@@ -180,7 +176,7 @@ async function runBacktest() {
     let activeImpersonator = null;
 
     // --- 🛡️ THE FIX: DYNAMIC ROTATING FETCH WRAPPER ---
-    const safeFetch = async (url, options = {}) => {
+    const safeFetch = async (url, options = {}) can=> {
         if (!activeImpersonator) {
             return new Response(JSON.stringify({ error: "No active proxy session configured." }), { status: 500 });
         }
@@ -300,7 +296,7 @@ async function runBacktest() {
         let wins = 0, losses = 0, skips = 0;
         let position = null; 
         
-        for (let i = 50; i < dataArray.length - 1; i++) {
+        for (let i = 200; i < dataArray.length - 1; i++) { 
             const currentCandle = dataArray[i];
             const high = currentCandle[2];
             const low = currentCandle[3];
@@ -334,7 +330,7 @@ async function runBacktest() {
                 continue; 
             }
 
-            const historicalSlice = dataArray.slice(i - 50, i);
+            const historicalSlice = dataArray.slice(i - 200, i);
             const { pred } = simulatePrediction(historicalSlice);
             
             if (pred === "SKIP") {
