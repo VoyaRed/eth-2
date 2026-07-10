@@ -19,7 +19,7 @@ const PROXY_POOL = [
 const settings = {
     ema_fast_period: 5, ema_slow_period: 13,
     macro_ema_fast: 27, macro_ema_slow: 63,
-    base_confidence: 50.1 
+    base_confidence: 49.0
 };
 
 const riskSettings = {
