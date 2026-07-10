@@ -30,12 +30,14 @@ const settings = {
     high_volatility_confidence: 50.1 
 };
 
-// --- Crypto.com UpDown Boundary Mechanics ---
+// --- Dynamic ATR & Trailing Stop Mechanics ---
 const riskSettings = {
-    takeProfitPerc: 0.005,  // 0.5% Target (Ceiling/Floor Knockout)
-    stopLossPerc: 0.0075,   // 0.75% Stop (Widens risk to absorb 5m noise)
-    slippagePerc: 0.0005    // 0.05% assumed entry slippage 
+    atrStopMultiplier: 1.5,       // Initial SL is 1.5x the current ATR
+    atrActivationMultiplier: 1.0, // Start trailing once in profit by 1.0x ATR
+    atrTrailMultiplier: 1.0,      // Trail behind the highest price by 1.0x ATR
+    slippagePerc: 0.0005          // 0.05% assumed entry slippage 
 };
+
 // Math Helpers
 const calculateEMAArray = (data, period) => {
     const k = 2 / (period + 1);
@@ -66,7 +68,7 @@ const calculateRSI = (closes) => {
 
 // Optimized Core Engine Simulator - Dual Strategy (High Frequency) Edition
 function simulatePrediction(candles) {
-    if (candles.length < 200) return { pred: "SKIP", conf: 0 };
+    if (candles.length < 200) return { pred: "SKIP", conf: 0, atr: 0 };
 
     const opens = candles.map(c => parseFloat(c[1]));
     const highs = candles.map(c => parseFloat(c[2]));
@@ -118,7 +120,10 @@ function simulatePrediction(candles) {
         const lowClose = Math.abs(lows[i] - closes[i-1]);
         trSum += Math.max(highLow, highClose, lowClose);
     }
-    const atrPercentage = ((trSum / 14) / currentClose) * 100;
+    
+    // Extracted raw ATR dollar value for stop-loss calculations
+    const rawATR = trSum / 14; 
+    const atrPercentage = (rawATR / currentClose) * 100;
 
     const isMacroUp = macroEmaFast > macroEmaSlow;
     const isMacroDown = macroEmaFast < macroEmaSlow;
@@ -137,7 +142,6 @@ function simulatePrediction(candles) {
     // ==========================================
     // STRATEGY B: THE MOMENTUM BREAKOUT (Added Macro Alignment)
     // ==========================================
-    // Breakouts now MUST align with the macro trend to avoid bull/bear traps
     const breakoutUp = isMacroUp && microTrendUp && rvol > 1.3 && currentHist > 0 && currentHist > prevHist && currentClose > currentOpen;
     const breakoutDown = isMacroDown && microTrendDown && rvol > 1.3 && currentHist < 0 && currentHist < prevHist && currentClose < currentOpen;
 
@@ -159,7 +163,7 @@ function simulatePrediction(candles) {
     // Avoid absolutely dead markets
     if (atrPercentage < 0.04) isVetoed = true; 
 
-    if (isVetoed) return { pred: "SKIP", conf: 0 };
+    if (isVetoed) return { pred: "SKIP", conf: 0, atr: rawATR };
 
     // --- 📊 DYNAMIC CONFIDENCE SCORING ---
     let conf = 48.0; 
@@ -178,11 +182,10 @@ function simulatePrediction(candles) {
     // Penalize if volatility is so insane it will knock out your SL via spread
     if (atrPercentage > 0.20) conf -= 5.0; 
 
-    if (conf < settings.base_confidence) return { pred: "SKIP", conf };
+    if (conf < settings.base_confidence) return { pred: "SKIP", conf, atr: rawATR };
 
-    return { pred, conf };
+    return { pred, conf, atr: rawATR };
 }
-
 
 async function runBacktest() {
     // Shared reference updated during proxy rotation loops
@@ -306,7 +309,7 @@ async function runBacktest() {
     const outOfSample = allCandles.slice(splitIndex);
 
     const testPhase = (dataArray, phaseName) => {
-        let wins = 0, losses = 0, skips = 0;
+        let wins = 0, losses = 0, breakevens = 0, skips = 0;
         let position = null; 
         
         for (let i = 200; i < dataArray.length - 1; i++) { 
@@ -317,34 +320,62 @@ async function runBacktest() {
 
             if (position) {
                 let tradeClosed = false;
+                let exitPrice = 0;
 
                 if (position.type === 'UP') {
+                    // 1. Update Highest Water Mark
+                    if (high > position.highWaterMark) {
+                        position.highWaterMark = high;
+                        
+                        // 2. Check if we reached activation threshold to start trailing
+                        if (position.highWaterMark >= position.activationPrice) {
+                            const newSL = position.highWaterMark - position.trailAmount;
+                            // Only move the stop loss UP, never down
+                            if (newSL > position.sl) position.sl = newSL; 
+                        }
+                    }
+
+                    // 3. Did we hit the Stop Loss? (Backtesting assumes worst-case intra-candle movement)
                     if (low <= position.sl) {
-                        losses++;
-                        tradeClosed = true;
-                    } else if (high >= position.tp) {
-                        wins++;
+                        exitPrice = position.sl;
                         tradeClosed = true;
                     }
                 } 
                 else if (position.type === 'DOWN') {
+                    // 1. Update Lowest Water Mark (Short logic)
+                    if (low < position.lowWaterMark) {
+                        position.lowWaterMark = low;
+                        
+                        if (position.lowWaterMark <= position.activationPrice) {
+                            const newSL = position.lowWaterMark + position.trailAmount;
+                            if (newSL < position.sl) position.sl = newSL; 
+                        }
+                    }
+
+                    // 3. Did we hit the Stop Loss?
                     if (high >= position.sl) {
-                        losses++;
-                        tradeClosed = true;
-                    } else if (low <= position.tp) {
-                        wins++;
+                        exitPrice = position.sl;
                         tradeClosed = true;
                     }
                 }
 
                 if (tradeClosed) {
+                    // Determine PnL based on entry vs dynamic exit price
+                    const pnl = position.type === 'UP' 
+                        ? (exitPrice - position.entry) 
+                        : (position.entry - exitPrice);
+
+                    if (pnl > 0) wins++;
+                    else if (pnl < 0) losses++;
+                    else breakevens++;
+
                     position = null; 
                 }
                 continue; 
             }
 
             const historicalSlice = dataArray.slice(i - 200, i);
-            const { pred } = simulatePrediction(historicalSlice);
+            const { pred, atr } = simulatePrediction(historicalSlice);
             
             if (pred === "SKIP") {
                 skips++;
@@ -353,27 +384,31 @@ async function runBacktest() {
                 position = {
                     type: 'UP',
                     entry: entryPrice,
-                    tp: entryPrice * (1 + riskSettings.takeProfitPerc),
-                    sl: entryPrice * (1 - riskSettings.stopLossPerc)
+                    sl: entryPrice - (atr * riskSettings.atrStopMultiplier),
+                    highWaterMark: entryPrice,
+                    activationPrice: entryPrice + (atr * riskSettings.atrActivationMultiplier),
+                    trailAmount: (atr * riskSettings.atrTrailMultiplier)
                 };
             } else if (pred === "DOWN") {
                 const entryPrice = close * (1 - riskSettings.slippagePerc);
                 position = {
                     type: 'DOWN',
                     entry: entryPrice,
-                    tp: entryPrice * (1 - riskSettings.takeProfitPerc),
-                    sl: entryPrice * (1 + riskSettings.stopLossPerc)
+                    sl: entryPrice + (atr * riskSettings.atrStopMultiplier),
+                    lowWaterMark: entryPrice,
+                    activationPrice: entryPrice - (atr * riskSettings.atrActivationMultiplier),
+                    trailAmount: (atr * riskSettings.atrTrailMultiplier)
                 };
             }
         }
 
-        const totalTrades = wins + losses;
+        const totalTrades = wins + losses + breakevens;
         const winRate = totalTrades > 0 ? ((wins / totalTrades) * 100).toFixed(2) : 0;
         
         console.log(`\n📊 --- ${phaseName} RESULTS ---`);
         console.log(`Total Trades Executed: ${totalTrades}`);
-        console.log(`Wins: ${wins} | Losses: ${losses} | Skipped: ${skips}`);
-        console.log(`Strict Win Rate: ${winRate}%`);
+        console.log(`Wins: ${wins} | Losses: ${losses} | Breakevens: ${breakevens} | Skipped: ${skips}`);
+        console.log(`Win Rate (Profitable Trades): ${winRate}%`);
     };
 
     testPhase(inSample, "IN-SAMPLE (Sandbox Phase)");
