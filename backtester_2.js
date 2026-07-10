@@ -22,14 +22,14 @@ const settings = {
     base_confidence: 50.1 
 };
 
-// --- CEX Risk & Fee Mechanics (Coinbase Advanced) ---
+// --- CEX Risk & Fee Mechanics (Derivatives Tier: Intro 1) ---
 const riskSettings = {
     atrStopMultiplier: 1.5,       
     atrActivationMultiplier: 1.0, 
     atrTrailMultiplier: 1.0,      
     slippagePerc: 0.0005,         
-    takerFeePerc: 0.004, // 0.4% Market Entry
-    makerFeePerc: 0.004  // 0.4% Stop/Limit Exit
+    takerFeePerc: 0.001,   // Updated: 0.100% Market Entry (Derivatives)
+    makerFeePerc: 0.00095  // Updated: 0.095% Stop/Limit Exit (Derivatives)
 };
 
 // Math Helpers
