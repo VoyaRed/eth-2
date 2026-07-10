@@ -25,7 +25,7 @@ const settings = {
 // --- CEX Risk & Fee Mechanics (Derivatives Tier: Intro 1) ---
 const riskSettings = {
     atrStopMultiplier: 1.5,       
-    atrActivationMultiplier: 1.0, 
+    atrActivationMultiplier: 4.0, 
     atrTrailMultiplier: 1.0,      
     slippagePerc: 0.0005,         
     takerFeePerc: 0.001,   // Updated: 0.100% Market Entry (Derivatives)
