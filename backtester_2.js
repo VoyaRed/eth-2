@@ -23,8 +23,8 @@ const settings = {
 };
 
 const riskSettings = {
-    atrStopMultiplier: 2.0,       // Cut losses reasonably
-    atrActivationMultiplier: 3.5, // Wait until DEEP in profit to secure the bag
+    atrStopMultiplier: 3.5,       // Cut losses reasonably
+    atrActivationMultiplier: 2.0, // Wait until DEEP in profit to secure the bag
     atrTrailMultiplier: 1.5,      // Give the trend 1.5 ATR of wiggle room
     slippagePerc: 0.0005,         
     takerFeePerc: 0.001,   
