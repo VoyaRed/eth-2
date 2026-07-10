@@ -39,7 +39,7 @@ const riskSettings = {
 // ─── STATE ENGINE ─────────────────────────────────────────────
 let livePosition = null;
 let lastExitIndex = 0;
-const exchange = new ccxt.coinbaseadvanced({ enableRateLimit: true });
+const exchange = new ccxt.coinbase({ enableRateLimit: true });
 
 // ─── PRICE ORACLE & INTERFACE SYNC ────────────────────────────
 async function fetchOraclePrice() {
