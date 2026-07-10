@@ -1,10 +1,9 @@
-// backtester_2.js - True Historical Forward/Backtester (Web Service Edition)
+// backtester_2.js - True Historical Forward/Backtester (Binary Epoch Edition)
 const ccxt = require('ccxt');
 const { Impit } = require('impit');
 const http = require('http'); 
 
 // --- 🌐 PROXY CONFIGURATION POOL ---
-// Replace placeholders with your actual Webshare (or other) credentials
 const PROXY_POOL = [
     'http://zirrujpi-ch-532845:8e2wprq017db@p.webshare.io:80',
     'http://zirrujpi-ch-532846:8e2wprq017db@p.webshare.io:80',
@@ -15,27 +14,22 @@ const PROXY_POOL = [
     'http://zirrujpi-ch-532851:8e2wprq017db@p.webshare.io:80',
     'http://zirrujpi-ch-532852:8e2wprq017db@p.webshare.io:80',
     'http://zirrujpi-ch-532853:8e2wprq017db@p.webshare.io:80',
-    'http://zirrujpi-ch-532854:8e2wprq017db@p.webshare.io:80'                             // Proxy 10
+    'http://zirrujpi-ch-532854:8e2wprq017db@p.webshare.io:80'                             
 ];
 
 // Your static weights from Supabase
 const settings = {
     ema_fast_period: 5, ema_slow_period: 13,
     macro_ema_fast: 27, macro_ema_slow: 63,
-    weight_macd: 3.0, weight_rsi: 1.5, weight_ema: 2.0, 
-    weight_pattern: 2.5, weight_history: 1.0, macro_weight: 1.5,
-    penalty_3_candles: 2.0, penalty_4_candles: 3.0, penalty_5_candles: 10.0,
-    rvol_threshold: 1.5, volatility_threshold: 0.14,
-    base_confidence: 50.1, 
-    high_volatility_confidence: 50.1 
+    base_confidence: 50.1
 };
 
-// --- Crypto.com UpDown Boundary Mechanics ---
-const riskSettings = {
-    takeProfitPerc: 0.005,  // 0.5% Target (Ceiling/Floor Knockout)
-    stopLossPerc: 0.0075,   // 0.75% Stop (Widens risk to absorb 5m noise)
-    slippagePerc: 0.0005    // 0.05% assumed entry slippage 
+// --- Polymarket / PancakeSwap Epoch Mechanics ---
+const predictionSettings = {
+    epochDurationCandles: 1,  // 1 Candle = 5 Minutes
+    slippagePerc: 0.0005      // 0.05% buffer to account for pool spread/fees
 };
+
 // Math Helpers
 const calculateEMAArray = (data, period) => {
     const k = 2 / (period + 1);
@@ -64,7 +58,7 @@ const calculateRSI = (closes) => {
     return rsi;
 };
 
-// Optimized Core Engine Simulator - Dual Strategy (High Frequency) Edition
+// Optimized Core Engine Simulator - 5-Min Binary Prediction Edition
 function simulatePrediction(candles) {
     if (candles.length < 200) return { pred: "SKIP", conf: 0 };
 
@@ -102,7 +96,7 @@ function simulatePrediction(candles) {
     const lowerWick = Math.min(currentOpen, currentClose) - currentLow;
     const bodySize = Math.max(Math.abs(currentClose - currentOpen), 0.0001);
 
-    // Filter absolute dead chop
+    // Veto chop
     let colorFlips = 0;
     for (let i = closes.length - 1; i >= closes.length - 4; i--) {
         const currentColor = closes[i] >= opens[i] ? 'green' : 'red';
@@ -126,93 +120,60 @@ function simulatePrediction(candles) {
     const microTrendDown = emaFast < emaSlow;
 
     let pred = "SKIP";
-    let strategyTriggered = "";
 
     // ==========================================
-    // STRATEGY A: THE PULLBACK SNIPER (Widened RSI Net)
+    // BINARY STRATEGY: MOMENTUM CONTINUATION
+    // For a 5-min epoch, we need aggressive momentum to guarantee the next candle pushes further
     // ==========================================
-    const pullbackUp = isMacroUp && microTrendUp && rsi > 30 && rsi < 58 && currentHist > prevHist;
-    const pullbackDown = isMacroDown && microTrendDown && rsi < 70 && rsi > 42 && currentHist < prevHist;
-
-    // ==========================================
-    // STRATEGY B: THE MOMENTUM BREAKOUT (Added Macro Alignment)
-    // ==========================================
-    // Breakouts now MUST align with the macro trend to avoid bull/bear traps
-    const breakoutUp = isMacroUp && microTrendUp && rvol > 1.3 && currentHist > 0 && currentHist > prevHist && currentClose > currentOpen;
-    const breakoutDown = isMacroDown && microTrendDown && rvol > 1.3 && currentHist < 0 && currentHist < prevHist && currentClose < currentOpen;
-
-    // --- EVALUATE TRIGGERS ---
-    if (pullbackUp || breakoutUp) {
-        pred = "UP";
-        strategyTriggered = breakoutUp ? "BREAKOUT" : "PULLBACK";
-    } else if (pullbackDown || breakoutDown) {
-        pred = "DOWN";
-        strategyTriggered = breakoutDown ? "BREAKOUT" : "PULLBACK";
-    }
-
-    // --- 🛡️ BARE MINIMUM VETO SYSTEMS ---
-    let isVetoed = false;
     
-    // Only veto Whipsaw if we are trying to trade a pullback.
-    if (isWhipsaw && strategyTriggered === "PULLBACK") isVetoed = true;            
+    // UP Condition: Macro is Up, Micro is Up, Volume is surging, MACD is accelerating upwards
+    const momentumUp = isMacroUp && microTrendUp && rvol > 1.2 && currentHist > 0 && currentHist > prevHist && currentClose > currentOpen;
     
-    // Avoid absolutely dead markets
-    if (atrPercentage < 0.04) isVetoed = true; 
+    // DOWN Condition: Macro is Down, Micro is Down, Volume is surging, MACD is accelerating downwards
+    const momentumDown = isMacroDown && microTrendDown && rvol > 1.2 && currentHist < 0 && currentHist < prevHist && currentClose < currentOpen;
 
-    if (isVetoed) return { pred: "SKIP", conf: 0 };
+    if (momentumUp) pred = "UP";
+    else if (momentumDown) pred = "DOWN";
+
+    // --- 🛡️ VETOS ---
+    if (isWhipsaw || atrPercentage < 0.04) return { pred: "SKIP", conf: 0 };
 
     // --- 📊 DYNAMIC CONFIDENCE SCORING ---
     let conf = 48.0; 
     
-    // 1. Reward perfect dual-trend alignment
-    if (isMacroUp && microTrendUp && pred === "UP") conf += 1.5;
-    if (isMacroDown && microTrendDown && pred === "DOWN") conf += 1.5;
+    if (pred === "UP") {
+        if (lowerWick > (bodySize * 0.5)) conf += 2.0; // Bullish rejection
+        if (rsi > 55 && rsi < 75) conf += 1.5;         // Perfect momentum zone
+    } 
+    else if (pred === "DOWN") {
+        if (upperWick > (bodySize * 0.5)) conf += 2.0; // Bearish rejection
+        if (rsi < 45 && rsi > 25) conf += 1.5;         // Perfect momentum zone
+    }
 
-    // 2. Reward Price Action (Relaxed Wick Logic to catch more plays)
-    if (pred === "UP" && lowerWick > (bodySize * 0.7)) conf += 2.0;
-    if (pred === "DOWN" && upperWick > (bodySize * 0.7)) conf += 2.0;
-
-    // 3. Reward Volume (Slightly easier threshold for breakout validation)
-    if (strategyTriggered === "BREAKOUT" && rvol > 1.6) conf += 3.5; 
+    if (rvol > 1.8) conf += 2.0; // High volume practically guarantees continuation
     
-    // Penalize if volatility is so insane it will knock out your SL via spread
-    if (atrPercentage > 0.20) conf -= 5.0; 
-
     if (conf < settings.base_confidence) return { pred: "SKIP", conf };
 
     return { pred, conf };
 }
 
-
 async function runBacktest() {
-    // Shared reference updated during proxy rotation loops
     let activeImpersonator = null;
 
-    // --- 🛡️ THE FIX: DYNAMIC ROTATING FETCH WRAPPER ---
     const safeFetch = async (url, options = {}) => {
-        if (!activeImpersonator) {
-            return new Response(JSON.stringify({ error: "No active proxy session configured." }), { status: 500 });
-        }
+        if (!activeImpersonator) return new Response(JSON.stringify({ error: "No proxy" }), { status: 500 });
         try {
             options.headers = options.headers || {};
             Object.assign(options.headers, {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 'Accept': 'application/json, text/plain, */*',
                 'Accept-Language': 'en-US,en;q=0.9',
-                'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-                'Sec-Ch-Ua-Mobile': '?0',
-                'Sec-Ch-Ua-Platform': '"Windows"',
-                'Sec-Fetch-Dest': 'empty',
                 'Sec-Fetch-Mode': 'cors',
                 'Sec-Fetch-Site': 'same-site'
             });
             return await activeImpersonator.fetch(url, options);
         } catch (err) {
-            console.log(`⚠️ Proxy connection issue handled: ${err.message}`);
-            return new Response(JSON.stringify({ error: err.message }), { 
-                status: 502, 
-                statusText: "Bad Gateway - Proxy Rotator Intercept" 
-            });
+            return new Response(JSON.stringify({ error: err.message }), { status: 502 });
         }
     };
     
@@ -222,158 +183,105 @@ async function runBacktest() {
     safeFetch.Request = globalThis.Request || Object;
     safeFetch.Response = globalThis.Response || Object;
 
-    // Instantiating standard CCXT Binance client with our custom dynamic fetcher
     const exchange = new ccxt.binance({
         fetchImplementation: safeFetch,
         enableRateLimit: true 
     });
     
     let allCandles = [];
-    
-    // Calculate full lookback required (10 proxies * 5000 candles = 50,000 candles back)
     const overallCandleTarget = PROXY_POOL.length * 5000;
     let since = exchange.milliseconds() - (overallCandleTarget * 5 * 60 * 1000); 
 
-    console.log(`🚀 Starting execution over ${PROXY_POOL.length} configured proxies. Target: ${overallCandleTarget} candles...`);
+    console.log(`🚀 Starting execution over ${PROXY_POOL.length} proxies for Epoch Simulation...`);
 
-    // --- 🔄 ROTATION LOOP ---
     for (let i = 0; i < PROXY_POOL.length; i++) {
         const currentProxyUrl = PROXY_POOL[i];
-        const proxyLabel = currentProxyUrl.includes('@') ? currentProxyUrl.split('@')[1] : currentProxyUrl;
-        
-        console.log(`\n⚙️ [Proxy ${i + 1}/${PROXY_POOL.length}] Connecting to tunnel via: ${proxyLabel}`);
         
         activeImpersonator = new Impit({ 
             browser: 'chrome',
             proxyUrl: currentProxyUrl 
         });
 
-        // Verify routing IP
         try {
             const res = await activeImpersonator.fetch('https://api.ipify.org?format=json');
             if (!res.ok) throw new Error(`Status ${res.status}`);
-            const ipData = await res.json();
-            console.log(`✅ Connection confirmed. Exit IP: ${ipData.ip}`);
         } catch (err) {
-            console.error(`❌ Proxy ${i + 1} validation failed (${err.message}). Advancing to next available proxy.`);
+            console.error(`❌ Proxy ${i + 1} validation failed. Skipping.`);
             continue; 
         }
 
         let proxyFetchedCount = 0;
         
-        // Pull 5000 candles with current proxy in 1000-candle increments
         while (proxyFetchedCount < 5000) {
             try {
-                // Requesting maximum permitted candle block size allowed by Binance (1000 candles)
                 const batch = await exchange.fetchOHLCV('ETH/USDT', '5m', since, 1000);
-                
-                if (!batch || batch.length === 0) {
-                    console.log("ℹ️ No further historical candles exposed by endpoint.");
-                    break;
-                }
+                if (!batch || batch.length === 0) break;
                 
                 allCandles = allCandles.concat(batch);
                 proxyFetchedCount += batch.length;
-                since = batch[batch.length - 1][0] + 1; // Update pagination pointer
+                since = batch[batch.length - 1][0] + 1; 
                 
-                console.log(`   📥 Extracted batch of ${batch.length} candles. (Proxy Progress: ${proxyFetchedCount}/5000 | Dataset Total: ${allCandles.length})`);
+                console.log(`   📥 Extracted batch of ${batch.length} candles. Dataset Total: ${allCandles.length}`);
                 
-                if (batch.length < 1000) {
-                    console.log("ℹ️ Reached current real-time data timeline.");
-                    break;
-                }
-                
-                // Keep rate limits clean
+                if (batch.length < 1000) break;
                 await new Promise(r => setTimeout(r, 1100));
             } catch (e) {
-                console.log(`⚠️ Execution Exception experienced on Proxy ${i + 1}:`, e.message);
-                break; // Escape inner loop to trigger fallback to next proxy pool asset
+                break; 
             }
         }
-        
         if (since > exchange.milliseconds()) break; 
     }
 
     if (allCandles.length < 50) {
-        console.log("❌ Matrix initialization failed. Insufficient dataset depth to construct backtest state engines.");
+        console.log("❌ Matrix initialization failed. Insufficient dataset depth.");
         return;
     }
 
-    console.log(`\n🎉 Success! Combined a aggregate historical dataset of ${allCandles.length} candles.`);
+    console.log(`\n🎉 Success! Combined an aggregate dataset of ${allCandles.length} candles.`);
 
     const splitIndex = Math.floor(allCandles.length * 0.7);
     const inSample = allCandles.slice(0, splitIndex);
     const outOfSample = allCandles.slice(splitIndex);
 
+    // --- NEW BINARY EPOCH TEST PHASE ---
     const testPhase = (dataArray, phaseName) => {
         let wins = 0, losses = 0, skips = 0;
-        let position = null; 
         
-        for (let i = 200; i < dataArray.length - 1; i++) { 
+        // We stop looping early enough so we have the future candle available to check the result
+        for (let i = 200; i < dataArray.length - predictionSettings.epochDurationCandles; i++) { 
             const currentCandle = dataArray[i];
-            const high = currentCandle[2];
-            const low = currentCandle[3];
-            const close = currentCandle[4];
+            const currentClose = currentCandle[4];
 
-            if (position) {
-                let tradeClosed = false;
-
-                if (position.type === 'UP') {
-                    if (low <= position.sl) {
-                        losses++;
-                        tradeClosed = true;
-                    } else if (high >= position.tp) {
-                        wins++;
-                        tradeClosed = true;
-                    }
-                } 
-                else if (position.type === 'DOWN') {
-                    if (high >= position.sl) {
-                        losses++;
-                        tradeClosed = true;
-                    } else if (low <= position.tp) {
-                        wins++;
-                        tradeClosed = true;
-                    }
-                }
-
-                if (tradeClosed) {
-                    position = null; 
-                }
-                continue; 
-            }
-
-            const historicalSlice = dataArray.slice(i - 200, i);
+            const historicalSlice = dataArray.slice(i - 200, i + 1); // Pass history UP TO current candle
             const { pred } = simulatePrediction(historicalSlice);
             
             if (pred === "SKIP") {
                 skips++;
-            } else if (pred === "UP") {
-                const entryPrice = close * (1 + riskSettings.slippagePerc);
-                position = {
-                    type: 'UP',
-                    entry: entryPrice,
-                    tp: entryPrice * (1 + riskSettings.takeProfitPerc),
-                    sl: entryPrice * (1 - riskSettings.stopLossPerc)
-                };
+                continue;
+            }
+
+            // The prediction market resolves EXACTLY N candles later
+            const resolutionCandle = dataArray[i + predictionSettings.epochDurationCandles];
+            const resolutionClose = resolutionCandle[4];
+
+            if (pred === "UP") {
+                const entryPrice = currentClose * (1 + predictionSettings.slippagePerc);
+                if (resolutionClose > entryPrice) wins++;
+                else losses++;
             } else if (pred === "DOWN") {
-                const entryPrice = close * (1 - riskSettings.slippagePerc);
-                position = {
-                    type: 'DOWN',
-                    entry: entryPrice,
-                    tp: entryPrice * (1 - riskSettings.takeProfitPerc),
-                    sl: entryPrice * (1 + riskSettings.stopLossPerc)
-                };
+                const entryPrice = currentClose * (1 - predictionSettings.slippagePerc);
+                if (resolutionClose < entryPrice) wins++;
+                else losses++;
             }
         }
 
         const totalTrades = wins + losses;
         const winRate = totalTrades > 0 ? ((wins / totalTrades) * 100).toFixed(2) : 0;
         
-        console.log(`\n📊 --- ${phaseName} RESULTS ---`);
+        console.log(`\n📊 --- ${phaseName} RESULTS (5-MIN EPOCH RESOLUTION) ---`);
         console.log(`Total Trades Executed: ${totalTrades}`);
         console.log(`Wins: ${wins} | Losses: ${losses} | Skipped: ${skips}`);
-        console.log(`Strict Win Rate: ${winRate}%`);
+        console.log(`Prediction Win Rate: ${winRate}%`);
     };
 
     testPhase(inSample, "IN-SAMPLE (Sandbox Phase)");
@@ -383,7 +291,7 @@ async function runBacktest() {
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('Binance Data / Crypto.com UpDown Simulator is online! View Render runtime logs for metrics output.\n');
+    res.end('Prediction Market Simulator is online! View Render runtime logs for metrics output.\n');
 }).listen(PORT, '0.0.0.0', () => {
     console.log(`🟢 Dummy web server bound to port ${PORT} on 0.0.0.0. Render Health Checks will pass!`);
     runBacktest().catch(console.error);
