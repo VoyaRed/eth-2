@@ -184,7 +184,7 @@ const exchange = new ccxt.binance({
 });
 
 // ------------------------------------------------------------------
-// MODULE 1: HISTORICAL BACKTEST (FEE ADJUSTED)
+// MODULE 1: HISTORICAL BACKTEST (FEE ADJUSTED WITH PNL AUDITING)
 // ------------------------------------------------------------------
 async function runBacktest() {
     let allCandles = [];
@@ -223,6 +223,9 @@ async function runBacktest() {
 
     const testPhase = (dataArray, phaseName) => {
         let wins = 0, losses = 0, breakevens = 0, skips = 0;
+        let cumulativeNetPnL = 0;
+        let totalWinPnL = 0;
+        let totalLossPnL = 0;
         let position = null; 
         
         for (let i = 200; i < dataArray.length - 1; i++) { 
@@ -269,9 +272,18 @@ async function runBacktest() {
                     const grossPnL = position.type === 'UP' ? (exitPrice - position.entry) : (position.entry - exitPrice);
                     const netPnL = grossPnL - (entryFee + exitFee);
 
-                    if (netPnL > 0) wins++;
-                    else if (netPnL < 0) losses++;
-                    else breakevens++;
+                    // Track Metrics
+                    cumulativeNetPnL += netPnL;
+
+                    if (netPnL > 0) {
+                        wins++;
+                        totalWinPnL += netPnL;
+                    } else if (netPnL < 0) {
+                        losses++;
+                        totalLossPnL += netPnL;
+                    } else {
+                        breakevens++;
+                    }
 
                     position = null; 
                 }
@@ -302,9 +314,17 @@ async function runBacktest() {
         const totalTrades = wins + losses + breakevens;
         const winRate = totalTrades > 0 ? ((wins / totalTrades) * 100).toFixed(2) : 0;
         
+        // Advanced performance calculations
+        const avgWin = wins > 0 ? (totalWinPnL / wins).toFixed(4) : "0.0000";
+        const avgLoss = losses > 0 ? (totalLossPnL / losses).toFixed(4) : "0.0000";
+        const profitFactor = totalLossPnL !== 0 ? Math.abs(totalWinPnL / totalLossPnL).toFixed(2) : 'Infinity';
+        
         console.log(`\n📊 --- ${phaseName} (NET CEX FEES) ---`);
         console.log(`Total Executed: ${totalTrades} | Wins: ${wins} | Losses: ${losses} | Skipped: ${skips}`);
         console.log(`Net Profitable Win Rate: ${winRate}%`);
+        console.log(`Cumulative Net PnL: ${cumulativeNetPnL.toFixed(4)} USDT (per 1 SOL traded)`);
+        console.log(`Avg Win: +${avgWin} USDT | Avg Loss: ${avgLoss} USDT`);
+        console.log(`Profit Factor: ${profitFactor}`);
     };
 
     testPhase(inSample, "IN-SAMPLE");
