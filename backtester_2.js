@@ -22,14 +22,13 @@ const settings = {
     base_confidence: 50.1 
 };
 
-// --- CEX Risk & Fee Mechanics (Derivatives Tier: Intro 1) ---
 const riskSettings = {
-    atrStopMultiplier: 1.5,       
-    atrActivationMultiplier: 15.0, 
-    atrTrailMultiplier: 1.0,      
+    atrStopMultiplier: 2.0,       // Cut losses reasonably
+    atrActivationMultiplier: 3.5, // Wait until DEEP in profit to secure the bag
+    atrTrailMultiplier: 1.5,      // Give the trend 1.5 ATR of wiggle room
     slippagePerc: 0.0005,         
-    takerFeePerc: 0.001,   // Updated: 0.100% Market Entry (Derivatives)
-    makerFeePerc: 0.00095  // Updated: 0.095% Stop/Limit Exit (Derivatives)
+    takerFeePerc: 0.001,   
+    makerFeePerc: 0.00095  
 };
 
 // Math Helpers
@@ -200,7 +199,7 @@ async function runBacktest() {
         
         while (proxyFetchedCount < 5000) {
             try {
-                const batch = await exchange.fetchOHLCV('SOL/USDT', '5m', since, 1000);
+                const batch = await exchange.fetchOHLCV('SOL/USDT', '15m', since, 1000);
                 if (!batch || batch.length === 0) break;
                 
                 allCandles = allCandles.concat(batch);
@@ -324,7 +323,7 @@ async function startPaperTrading() {
     setInterval(async () => {
         try {
             // Fetch last 200 candles to feed the indicators
-            const recentCandles = await exchange.fetchOHLCV('SOL/USDT', '5m', undefined, 200);
+            const recentCandles = await exchange.fetchOHLCV('SOL/USDT', '15m', undefined, 200);
             const latestClose = recentCandles[recentCandles.length - 1][4];
             
             // --- Position Management ---
