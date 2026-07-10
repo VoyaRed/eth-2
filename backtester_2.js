@@ -200,7 +200,7 @@ async function runBacktest() {
         
         while (proxyFetchedCount < 5000) {
             try {
-                const batch = await exchange.fetchOHLCV('ETH/USDT', '5m', since, 1000);
+                const batch = await exchange.fetchOHLCV('SOL/USDT', '5m', since, 1000);
                 if (!batch || batch.length === 0) break;
                 
                 allCandles = allCandles.concat(batch);
@@ -318,13 +318,13 @@ async function runBacktest() {
 let livePosition = null;
 
 async function startPaperTrading() {
-    console.log(`\n🟢 Transitioning to Live Paper Trading Engine. Monitoring ETH/USDT...`);
+    console.log(`\n🟢 Transitioning to Live Paper Trading Engine. Monitoring SOL/USDT...`);
     activeImpersonator = new Impit({ browser: 'chrome', proxyUrl: PROXY_POOL[0] }); // Just use proxy 1 for live polling
 
     setInterval(async () => {
         try {
             // Fetch last 200 candles to feed the indicators
-            const recentCandles = await exchange.fetchOHLCV('ETH/USDT', '5m', undefined, 200);
+            const recentCandles = await exchange.fetchOHLCV('SOL/USDT', '5m', undefined, 200);
             const latestClose = recentCandles[recentCandles.length - 1][4];
             
             // --- Position Management ---
