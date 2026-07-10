@@ -179,7 +179,7 @@ async function executePaperEngine() {
         const currentPrice = await fetchOraclePrice();
         
         // Fetch public market data structure cleanly without keys
-        const ohlcv = await exchange.fetchOHLCV(tradeSettings.symbol, '10800', undefined, 250);
+        const ohlcv = await exchange.fetchOHLCV(tradeSettings.symbol, '1h', undefined, 250);
         const { pred, conf, atr } = generateSignal(ohlcv);
 
         // Continuous standard logging directly to Render's container terminal
