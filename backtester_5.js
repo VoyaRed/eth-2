@@ -1,4 +1,4 @@
-// upsidedowncake - Jupiter Perps 15-Minute ADX Specialist Adapter (SOL ONLY + Render Keep-Alive)
+// upsidedowncake - Jupiter Perps 15-Minute ADX Specialist Adapter (SOL ONLY + Render Keep-Alive + Relaxed Compass)
 const fs = require('fs');
 const http = require('http');
 
@@ -163,7 +163,6 @@ function simulatePrediction(candles) {
     const rsi = calculateRSI(closes);
     const emaFast = calculateEMAArray(closes, settings.ema_fast_period).pop();
     const emaSlow = calculateEMAArray(closes, settings.ema_slow_period).pop();
-    const macroEmaFast = calculateEMAArray(closes, settings.macro_ema_fast).pop();
     const htfEma = calculateEMAArray(closes, settings.htf_macro_ema).pop();
     
     const currentADX = calculateADX(highs, lows, closes, settings.adx_period);
@@ -194,15 +193,16 @@ function simulatePrediction(candles) {
     const rawATR = trSum / 14; 
     const atrPercentage = (rawATR / currentClose) * 100;
 
-    const isBullFan = emaFast > emaSlow && emaSlow > macroEmaFast;
-    const isBearFan = emaFast < emaSlow && emaSlow < macroEmaFast;
-
     let intent = "NONE"; 
-    const touchesFastEmaLong = currentLow <= emaFast && currentClose > emaFast;
-    const touchesFastEmaShort = currentHigh >= emaFast && currentClose < emaFast;
-
-    if (isBullFan && touchesFastEmaLong) intent = "UP";
-    else if (isBearFan && touchesFastEmaShort) intent = "DOWN";
+    
+    // --- THE FIX: RELAXED COMPASS ---
+    // Instead of requiring a rigid EMA fan + wick touch, we let the ML model 
+    // evaluate the setup as long as the EMA trend indicates a direction.
+    if (emaFast > emaSlow) {
+        intent = "UP";
+    } else if (emaFast < emaSlow) {
+        intent = "DOWN";
+    }
 
     let pred = intent;
     let isSkipped = false;
