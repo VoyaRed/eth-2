@@ -1,4 +1,4 @@
-// upsidedowncake - Jupiter Perps 15-Minute ADX Specialist Adapter (SOL ONLY + Render Keep-Alive + Relaxed Compass)
+// upsidedowncake - Jupiter Perps 5-Minute ADX Specialist Adapter (SOL ONLY + Render Keep-Alive + Relaxed Compass)
 const fs = require('fs');
 const http = require('http');
 
@@ -193,53 +193,41 @@ function simulatePrediction(candles) {
     const rawATR = trSum / 14; 
     const atrPercentage = (rawATR / currentClose) * 100;
 
-    let intent = "NONE"; 
-    
-    // --- THE FIX: RELAXED COMPASS ---
-    // Instead of requiring a rigid EMA fan + wick touch, we let the ML model 
-    // evaluate the setup as long as the EMA trend indicates a direction.
+    // --- RELAXED COMPASS ALIGNMENT ---
+    // Matches python: np.where(df['ema9'] > df['ema21'], 1.0, -1.0)
+    let intent = "DOWN"; 
     if (emaFast > emaSlow) {
         intent = "UP";
-    } else if (emaFast < emaSlow) {
-        intent = "DOWN";
     }
 
     let pred = intent;
     let isSkipped = false;
     let dynamicConfThreshold = settings.min_confidence;
 
-    if (intent !== "NONE") {
-        if (intent === "UP" && currentClose < htfEma) dynamicConfThreshold = 75; 
-        else if (intent === "DOWN" && currentClose > htfEma) dynamicConfThreshold = 75;
+    if (intent === "UP" && currentClose < htfEma) dynamicConfThreshold = 75; 
+    else if (intent === "DOWN" && currentClose > htfEma) dynamicConfThreshold = 75;
 
-        if (!isSkipped && atrPercentage < 0.05) isSkipped = true;
-        if (!isSkipped && currentADX < settings.min_adx_trend_strength) isSkipped = true;
-    }
+    if (!isSkipped && atrPercentage < 0.05) isSkipped = true;
+    if (!isSkipped && currentADX < settings.min_adx_trend_strength) isSkipped = true;
 
     let conf = 40.0; 
-    if (intent !== "NONE") {
-        if (intent === "UP" && lowerWick > bodySize) conf += 15.0; 
-        if (intent === "DOWN" && upperWick > bodySize) conf += 15.0;
-        if (rvol > 1.5) conf += 10.0;
-        if (isWhipsaw) conf -= 15.0;
-    }
+    if (intent === "UP" && lowerWick > bodySize) conf += 15.0; 
+    if (intent === "DOWN" && upperWick > bodySize) conf += 15.0;
+    if (rvol > 1.5) conf += 10.0;
+    if (isWhipsaw) conf -= 15.0;
 
-    if (intent !== "NONE" && !isSkipped && conf < dynamicConfThreshold) isSkipped = true;
+    if (!isSkipped && conf < dynamicConfThreshold) isSkipped = true;
 
-    if (isSkipped && intent !== "NONE") pred = `${intent} (Skipped)`;
-    else if (isSkipped) pred = "NONE";
+    if (isSkipped) pred = `${intent} (Skipped)`;
 
+    // ONLY the 6 production features exported
     const mlFeatures = {
+        directionIntent: intent === "UP" ? 1.0 : -1.0,
         rsi: rsi.toFixed(4),
-        currentADX: currentADX.toFixed(4),
-        prevADX: prevADX.toFixed(4),
         rvol: rvol.toFixed(4),
         atrPercentage: atrPercentage.toFixed(4),
-        upperWick: upperWick.toFixed(4),
-        lowerWick: lowerWick.toFixed(4),
-        bodySize: bodySize.toFixed(4),
-        isWhipsaw: isWhipsaw ? 1 : 0,
-        directionIntent: intent === "UP" ? 1 : (intent === "DOWN" ? -1 : 0)
+        prevADX: prevADX.toFixed(4),
+        bodySize: bodySize.toFixed(4)
     };
 
     return { pred, intent, conf, atr: rawATR, mlFeatures };
@@ -286,27 +274,24 @@ const runSimulation = (allCandles, customRisk, startIndex, endIndex, csvFileName
             }
 
             if (tradeClosed) {
-                // 1. Calculate time held to figure out Jupiter Borrow Fees
                 const candlesHeld = i - position.entryIndex;
                 const hoursHeld = candlesHeld * (5 / 60); 
                 
-                // 2. Calculate Jupiter DEX Fees
                 const positionSizeValue = position.entry * totalUnits;
                 const entryFee = positionSizeValue * customRisk.openFeePerc;
                 const exitFee = (exitPrice * totalUnits) * customRisk.closeFeePerc;
                 const borrowFee = positionSizeValue * (customRisk.borrowFeePerHourPerc * hoursHeld);
                 const networkFees = customRisk.priorityFeeUsd * 2; 
 
-                // 3. Final PnL Math
                 const grossPnL = position.type === 'UP' ? ((exitPrice - position.entry) * totalUnits) : ((position.entry - exitPrice) * totalUnits);
                 const netPnL = grossPnL - (entryFee + exitFee + borrowFee + networkFees);
                 cumulativeNetPnL += netPnL;
 
-                // Write directly to the specific asset's CSV
+                // Sync 100% with the Python Vector Input Array
                 if (RECORD_ML_DATA && position.features && (!position.isVirtual || RECORD_ALL_RAW_INTENTS)) {
                     const isWin = netPnL > 0 ? 1 : 0;
                     const f = position.features;
-                    const csvRow = `${f.rsi},${f.currentADX},${f.prevADX},${f.rvol},${f.atrPercentage},${f.upperWick},${f.lowerWick},${f.bodySize},${f.isWhipsaw},${f.directionIntent},${isWin}\n`;
+                    const csvRow = `${f.directionIntent},${f.rsi},${f.rvol},${f.atrPercentage},${f.prevADX},${f.bodySize},${isWin}\n`;
                     fs.appendFileSync(csvFileName, csvRow);
                 }
 
@@ -355,10 +340,10 @@ const runSimulation = (allCandles, customRisk, startIndex, endIndex, csvFileName
 // ------------------------------------------------------------------
 async function startSystem() {
     const CACHE_FILENAME = `sol_usdt_cache.json`;
-    const CSV_FILENAME = `training_sol.csv`;
+    const CSV_FILENAME = `training_jupiter_5m.csv`;
     
     console.log(`\n===============================================================`);
-    console.log(`🚀 PROCESSING ASSET: SOLANA (SOL)`);
+    console.log(`🚀 PROCESSING ASSET: SOLANA (SOL) [5M TIMEFRAME]`);
     console.log(`===============================================================`);
 
     if (!fs.existsSync(CACHE_FILENAME)) {
@@ -367,14 +352,15 @@ async function startSystem() {
     }
 
     if (RECORD_ML_DATA) {
-        fs.writeFileSync(CSV_FILENAME, "rsi,currentADX,prevADX,rvol,atrPercentage,upperWick,lowerWick,bodySize,isWhipsaw,directionIntent,target_win\n");
+        fs.writeFileSync(CSV_FILENAME, "directionIntent,rsi,rvol,atrPercentage,prevADX,bodySize,target_win\n");
         console.log(`📁 Initialized dedicated dataset: ${CSV_FILENAME}`);
     }
 
     let allCandles = [];
     try {
         const rawCandles = JSON.parse(fs.readFileSync(CACHE_FILENAME, 'utf8'));
-        allCandles = resampleCandles(rawCandles, 3); 
+        // KEEP AS 1 FOR RAW 5M CANDLES
+        allCandles = resampleCandles(rawCandles, 1); 
     } catch (err) {
         console.log(`❌ Error reading/parsing cache for SOL`);
         return "Error parsing file."; 
@@ -405,18 +391,15 @@ async function startSystem() {
 const PORT = process.env.PORT || 3000;
 let runResults = "Backtest execution in progress or waiting for data...";
 
-// Trigger backtest immediately on boot
 startSystem().then(summary => {
     runResults = summary || "Backtest finished with no output.";
 }).catch(err => {
     runResults = `Backtest failed: ${err.message}`;
 });
 
-// Bind to port so Render Free Tier setup marks deployment as successful
 http.createServer((req, res) => {
-    // If you visit yourURL.onrender.com/download, show the CSV data
     if (req.url === '/download') {
-        const CSV_FILENAME = `training_sol.csv`;
+        const CSV_FILENAME = `training_jupiter_5m.csv`;
         if (fs.existsSync(CSV_FILENAME)) {
             res.writeHead(200, { 'Content-Type': 'text/plain' });
             const csvData = fs.readFileSync(CSV_FILENAME, 'utf8');
@@ -427,7 +410,6 @@ http.createServer((req, res) => {
         }
     }
 
-    // Default home page display
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.write("=== JUPITER PERPS ML BACKTESTER RUNNING ===\n\n");
     res.write("To view/copy your training CSV data, go to: /download\n\n");
@@ -435,3 +417,4 @@ http.createServer((req, res) => {
 }).listen(PORT, () => {
     console.log(`🤖 Render Dummy HTTP server active on port ${PORT}`);
 });
+    
