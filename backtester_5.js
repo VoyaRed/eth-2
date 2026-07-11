@@ -1,5 +1,6 @@
-// upsidedowncake - Jupiter Perps 15-Minute ADX Specialist Adapter (SOL ONLY)
+// upsidedowncake - Jupiter Perps 15-Minute ADX Specialist Adapter (SOL ONLY + Render Keep-Alive)
 const fs = require('fs');
+const http = require('http');
 
 const RECORD_ML_DATA = true;
 const RECORD_ALL_RAW_INTENTS = true; 
@@ -287,14 +288,14 @@ const runSimulation = (allCandles, customRisk, startIndex, endIndex, csvFileName
             if (tradeClosed) {
                 // 1. Calculate time held to figure out Jupiter Borrow Fees
                 const candlesHeld = i - position.entryIndex;
-                const hoursHeld = candlesHeld * (5 / 60); // 5m timeframe math
+                const hoursHeld = candlesHeld * (5 / 60); 
                 
                 // 2. Calculate Jupiter DEX Fees
                 const positionSizeValue = position.entry * totalUnits;
                 const entryFee = positionSizeValue * customRisk.openFeePerc;
                 const exitFee = (exitPrice * totalUnits) * customRisk.closeFeePerc;
                 const borrowFee = positionSizeValue * (customRisk.borrowFeePerHourPerc * hoursHeld);
-                const networkFees = customRisk.priorityFeeUsd * 2; // Paid twice (open and close)
+                const networkFees = customRisk.priorityFeeUsd * 2; 
 
                 // 3. Final PnL Math
                 const grossPnL = position.type === 'UP' ? ((exitPrice - position.entry) * totalUnits) : ((position.entry - exitPrice) * totalUnits);
@@ -362,7 +363,7 @@ async function startSystem() {
 
     if (!fs.existsSync(CACHE_FILENAME)) {
         console.log(`⏭️ No cache data found for SOL. Please run fetcher.js first.`);
-        return;
+        return "No cache file found.";
     }
 
     if (RECORD_ML_DATA) {
@@ -373,15 +374,16 @@ async function startSystem() {
     let allCandles = [];
     try {
         const rawCandles = JSON.parse(fs.readFileSync(CACHE_FILENAME, 'utf8'));
-        allCandles = resampleCandles(rawCandles, 3); // Downsamples 5m candles to 15m intervals
+        allCandles = resampleCandles(rawCandles, 3); 
     } catch (err) {
         console.log(`❌ Error reading/parsing cache for SOL`);
-        return; 
+        return "Error parsing file."; 
     }
 
     console.log(`⚙️ Running Backtest Simulation on SOL...`);
     const epochSize = Math.floor(allCandles.length / 5);
     let botState = null; 
+    let finalSummary = "";
 
     for (let epochNum = 1; epochNum <= 5; epochNum++) {
         const startIndex = epochNum === 1 ? 250 : (epochNum - 1) * epochSize;
@@ -389,9 +391,32 @@ async function startSystem() {
         
         const metrics = runSimulation(allCandles, riskSettings, startIndex, endIndex, CSV_FILENAME, botState);
         botState = metrics.endState; 
-        console.log(`   Epoch ${epochNum} | Trades: ${metrics.trades} | PnL: ${metrics.pnl.toFixed(2)} USD`);
+        const statusStr = `Epoch ${epochNum} | Trades: ${metrics.trades} | PnL: ${metrics.pnl.toFixed(2)} USD`;
+        console.log(`   ${statusStr}`);
+        finalSummary += statusStr + "\n";
     }
     console.log(`✅ SOL Complete! Dataset saved to ${CSV_FILENAME}.\n`);
+    return finalSummary;
 }
 
-startSystem();
+// ------------------------------------------------------------------
+// RENDER DUMMY HTTP SERVER (KEEP-ALIVE BYPASS)
+// ------------------------------------------------------------------
+const PORT = process.env.PORT || 3000;
+let runResults = "Backtest execution in progress or waiting for data...";
+
+// Trigger backtest immediately on boot
+startSystem().then(summary => {
+    runResults = summary || "Backtest finished with no output.";
+}).catch(err => {
+    runResults = `Backtest failed: ${err.message}`;
+});
+
+// Bind to port so Render Free Tier setup marks deployment as successful
+http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.write("=== JUPITER PERPS ML BACKTESTER RUNNING ===\n\n");
+    res.end(runResults);
+}).listen(PORT, () => {
+    console.log(`🤖 Render Dummy HTTP server active on port ${PORT}`);
+});
