@@ -400,7 +400,7 @@ async function startSystem() {
 }
 
 // ------------------------------------------------------------------
-// RENDER DUMMY HTTP SERVER (KEEP-ALIVE BYPASS)
+// RENDER DUMMY HTTP SERVER (WITH CSV VIEWER FOR MOBILE)
 // ------------------------------------------------------------------
 const PORT = process.env.PORT || 3000;
 let runResults = "Backtest execution in progress or waiting for data...";
@@ -414,8 +414,23 @@ startSystem().then(summary => {
 
 // Bind to port so Render Free Tier setup marks deployment as successful
 http.createServer((req, res) => {
+    // If you visit yourURL.onrender.com/download, show the CSV data
+    if (req.url === '/download') {
+        const CSV_FILENAME = `training_sol.csv`;
+        if (fs.existsSync(CSV_FILENAME)) {
+            res.writeHead(200, { 'Content-Type': 'text/plain' });
+            const csvData = fs.readFileSync(CSV_FILENAME, 'utf8');
+            return res.end(csvData);
+        } else {
+            res.writeHead(404, { 'Content-Type': 'text/plain' });
+            return res.end("CSV file not generated yet. Wait for the backtest to finish.");
+        }
+    }
+
+    // Default home page display
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.write("=== JUPITER PERPS ML BACKTESTER RUNNING ===\n\n");
+    res.write("To view/copy your training CSV data, go to: /download\n\n");
     res.end(runResults);
 }).listen(PORT, () => {
     console.log(`🤖 Render Dummy HTTP server active on port ${PORT}`);
