@@ -1,15 +1,14 @@
 {
-  "name": "crypto-updown-backtester",
+  "name": "jupiter-sol-backtester",
   "version": "1.0.0",
-  "description": "Historical forward-testing engine for Crypto.com UpDown Options",
-  "main": "backtester_2.js",
+  "description": "Solana perps ML backtester with Jupiter fee structure",
+  "main": "backtester_5.js",
   "scripts": {
-    "start": "node backtester_2.js"
+    "fetch": "node fetcher.js",
+    "start": "node backtester_5.js"
   },
   "dependencies": {
-    "ccxt": "^4.5.63",
-    "impit": "^0.14.2",
-    "undici": "^8.6.0"
+    "ccxt": "^4.2.0"
   },
   "engines": {
     "node": ">=18.0.0"
